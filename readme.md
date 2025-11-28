@@ -6,6 +6,7 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 
 ## 🚀 Features
 
+* No npm install required. Zero dependencies. Audit the code in 1 minute.
 * Zero Dependencies: Runs on standard Node.js (v14+). No 'npm install' required.
 * Deep NVM Support: Automatically detects NVM installations (Windows/macOS/Linux) and scans inside every installed Node version.
 * Forensic Scan: Checks for physical malware files (setup_bun.js, bun_environment.js) regardless of version numbers.

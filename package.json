@@ -1,0 +1,19 @@
+{
+  "name": "shai-hulud-2-scanner",
+  "version": "1.0.0",
+  "description": "Forensic scanner for Shai-Hulud 2.0 malware artifacts and compromised packages.",
+  "main": "scan.js",
+  "bin": {
+    "shai-hulud-scanner": "./scan.js"
+  },
+  "scripts": {
+    "start": "node scan.js"
+  },
+  "keywords": ["security", "malware", "scanner", "shai-hulud", "npm", "forensic"],
+  "author": "CyberDracula",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CyberDracula/shai-hulud-2-scanner.git"
+  }
+}

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Shai-Hulud 2.0 Scanner Tool (Verbose Edition)
  * * Features:
