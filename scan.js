@@ -474,10 +474,21 @@ async function uploadReport(csvContent, userInfo) {
     const threats = detectedIssues.filter(i => i.type !== 'SAFE_MATCH');
     if (threats.length > 0) {
         console.log(`\n${colors.red}!!! THREATS DETECTED: ${threats.length} !!!${colors.reset}`);
+    } else if (detectedIssues.length > 0) {
+        console.log(`\n${colors.green}✓ System clean. (Found ${detectedIssues.length} safe versions for audit).${colors.reset}`);
     } else {
-        console.log(`\n${colors.green}✓ System clean. No active malware found.${colors.reset}`);
+        console.log(`\n${colors.green}✓ System clean. No target packages found.${colors.reset}`);
     }
 
     const reportCSV = generateReport(userInfo);
-    if (shouldUpload) await uploadReport(reportCSV, userInfo);
+    // --- UPLOAD LOGIC ---
+    if (detectedIssues.length === 0) {
+        console.log(`${colors.dim}    > Report is empty. Skipping upload.${colors.reset}`);
+    } 
+    else if (shouldUpload) {
+        await uploadReport(reportCSV, userInfo);
+    } 
+    else {
+        console.log(`${colors.dim}    > Upload skipped (disabled by user).${colors.reset}`);
+    }
 })();
