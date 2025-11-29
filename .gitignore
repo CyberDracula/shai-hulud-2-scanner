@@ -45,4 +45,6 @@ build/
 # Optional eslint cache
 .eslintcache
 
-*.csv
+# Scanner cache and reports
+.cache/
+shai-hulud-report.csv

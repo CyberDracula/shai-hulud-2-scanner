@@ -34,9 +34,18 @@ const IOC_CSV_URL = 'https://raw.githubusercontent.com/wiz-sec-public/wiz-resear
 // Source 2: Hemachandsai Malicious Packages
 const IOC_JSON_URL = 'https://raw.githubusercontent.com/hemachandsai/shai-hulud-malicious-packages/main/malicious_npm_packages.json';
 
+// Cache Configuration
+const CACHE_DIR = path.join(__dirname, '.cache');
+const FALLBACK_DIR = path.join(__dirname, 'fallback');
+const CACHE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (configurable)
+const CACHE_WIZ_FILE = path.join(CACHE_DIR, 'wiz-iocs.csv');
+const CACHE_JSON_FILE = path.join(CACHE_DIR, 'malicious-packages.json');
+const FALLBACK_WIZ_FILE = path.join(FALLBACK_DIR, 'wiz-iocs.csv');
+const FALLBACK_JSON_FILE = path.join(FALLBACK_DIR, 'malicious-packages.json');
+
 // API Configuration
-const UPLOAD_API_URL = 'https://YOUR-LAMBDA-URL.lambda-url.us-east-1.on.aws/'; 
-const API_KEY = 'secure-me-1234'; 
+const UPLOAD_API_URL = 'https://YOUR-LAMBDA-URL.lambda-url.us-east-1.on.aws/';
+const API_KEY = 'secure-me-1234';
 // ---------------------
 
 const colors = {
@@ -74,33 +83,80 @@ function getUserInfo() {
     return info;
 }
 
-// --- 2. Threat Intelligence (Dual Feed) ---
-async function fetchThreats() {
+// --- 2. Cache Helpers ---
+function ensureDir(dir) {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+}
+
+function isCacheValid(cacheFile) {
+    if (!fs.existsSync(cacheFile)) return false;
+    const stats = fs.statSync(cacheFile);
+    const age = Date.now() - stats.mtimeMs;
+    return age < CACHE_TIMEOUT_MS;
+}
+
+function loadFromCache(cacheFile, type) {
+    try {
+        const content = fs.readFileSync(cacheFile, 'utf8');
+        console.log(`    > ${type}: Loaded from cache (age: ${Math.round((Date.now() - fs.statSync(cacheFile).mtimeMs) / 1000 / 60)}m)`);
+        return content;
+    } catch (e) {
+        return null;
+    }
+}
+
+function loadFromFallback(fallbackFile, type) {
+    try {
+        if (!fs.existsSync(fallbackFile)) return null;
+        const content = fs.readFileSync(fallbackFile, 'utf8');
+        console.log(`    > ${type}: ${colors.yellow}Using offline fallback${colors.reset}`);
+        return content;
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveToCache(cacheFile, content) {
+    try {
+        ensureDir(path.dirname(cacheFile));
+        fs.writeFileSync(cacheFile, content, 'utf8');
+    } catch (e) {
+        console.log(`    > Warning: Could not write to cache: ${e.message}`);
+    }
+}
+
+// --- 3. Threat Intelligence (Dual Feed with Caching) ---
+async function fetchThreats(forceNoCache = false) {
     console.log(`\n${colors.cyan}[2/5] Downloading Threat Intelligence (Dual Feed)...${colors.reset}`);
+    if (forceNoCache) console.log(`    > ${colors.yellow}Cache bypassed (--no-cache flag)${colors.reset}`);
     
     try {
         const [wizData, jsonData] = await Promise.allSettled([
-            fetchWizCSV(),
-            fetchMaliciousJSON()
+            fetchWithCache(IOC_CSV_URL, CACHE_WIZ_FILE, FALLBACK_WIZ_FILE, 'Wiz.io CSV', forceNoCache),
+            fetchWithCache(IOC_JSON_URL, CACHE_JSON_FILE, FALLBACK_JSON_FILE, 'Malicious JSON', forceNoCache)
         ]);
 
         const badPackages = {};
         let count = 0;
 
         // Process Source 1 (Wiz CSV)
-        if (wizData.status === 'fulfilled') {
-            for (const [pkg, vers] of Object.entries(wizData.value)) {
+        if (wizData.status === 'fulfilled' && wizData.value) {
+            const parsed = parseWizCSV(wizData.value);
+            for (const [pkg, vers] of Object.entries(parsed)) {
                 if (!badPackages[pkg]) badPackages[pkg] = [];
                 badPackages[pkg].push(...vers);
             }
-            console.log(`    > [Source 1] Wiz.io: Loaded CSV data.`);
+            console.log(`    > [Source 1] Wiz.io: Loaded successfully.`);
         } else {
-            console.log(`${colors.red}    > [Source 1] Failed: ${wizData.reason}${colors.reset}`);
+            console.log(`${colors.red}    > [Source 1] Failed: ${wizData.reason || 'No data'}${colors.reset}`);
         }
 
         // Process Source 2 (Hemachandsai JSON)
-        if (jsonData.status === 'fulfilled') {
-            for (const [pkg, vers] of Object.entries(jsonData.value)) {
+        if (jsonData.status === 'fulfilled' && jsonData.value) {
+            const parsed = parseMaliciousJSON(jsonData.value);
+            for (const [pkg, vers] of Object.entries(parsed)) {
                 if (!badPackages[pkg]) badPackages[pkg] = [];
                 // If versions is empty [], it means ALL versions are bad -> Add Wildcard '*'
                 if (vers.length === 0) {
@@ -109,9 +165,9 @@ async function fetchThreats() {
                     badPackages[pkg].push(...vers);
                 }
             }
-            console.log(`    > [Source 2] Hemachandsai: Loaded JSON denylist.`);
+            console.log(`    > [Source 2] Hemachandsai: Loaded successfully.`);
         } else {
-            console.log(`${colors.red}    > [Source 2] Failed: ${jsonData.reason}${colors.reset}`);
+            console.log(`${colors.red}    > [Source 2] Failed: ${jsonData.reason || 'No data'}${colors.reset}`);
         }
 
         // Clean duplicates
@@ -128,52 +184,82 @@ async function fetchThreats() {
     }
 }
 
-// Helper: Fetch Wiz CSV
-function fetchWizCSV() {
+// Helper: Unified fetch with cache and fallback
+function fetchWithCache(url, cacheFile, fallbackFile, sourceName, forceNoCache = false) {
     return new Promise((resolve, reject) => {
-        https.get(IOC_CSV_URL, (res) => {
+        // 1. Check if cache is valid (skip if --no-cache flag is used)
+        if (!forceNoCache && isCacheValid(cacheFile)) {
+            const cached = loadFromCache(cacheFile, sourceName);
+            if (cached) return resolve(cached);
+        }
+
+        // 2. Try to fetch from network
+        const timeout = setTimeout(() => {
+            console.log(`    > ${sourceName}: ${colors.yellow}Network timeout, trying fallback...${colors.reset}`);
+            const fallback = loadFromFallback(fallbackFile, sourceName);
+            if (fallback) resolve(fallback);
+            else reject(new Error('Timeout and no fallback available'));
+        }, 10000); // 10 second network timeout
+
+        https.get(url, (res) => {
+            clearTimeout(timeout);
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                const lines = data.split('\n').filter(l => l.trim() !== '');
-                const result = {};
-                const startIdx = lines[0].toLowerCase().includes('package') ? 1 : 0;
-                for (let i = startIdx; i < lines.length; i++) {
-                    const parts = lines[i].split(',');
-                    if (parts.length >= 2) {
-                        const rawName = parts[0].replace(/["']/g, '').trim();
-                        const rawVer = parts[1].replace(/["'=<>v\s]/g, '');
-                        if (rawName && rawVer) {
-                            if (!result[rawName]) result[rawName] = [];
-                            result[rawName].push(rawVer);
-                        }
-                    }
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    console.log(`    > ${sourceName}: Downloaded from network.`);
+                    saveToCache(cacheFile, data);
+                    resolve(data);
+                } else {
+                    console.log(`    > ${sourceName}: HTTP ${res.statusCode}, trying fallback...`);
+                    const fallback = loadFromFallback(fallbackFile, sourceName);
+                    if (fallback) resolve(fallback);
+                    else reject(new Error(`HTTP ${res.statusCode}`));
                 }
-                resolve(result);
             });
-        }).on('error', reject);
+        }).on('error', (e) => {
+            clearTimeout(timeout);
+            console.log(`    > ${sourceName}: ${colors.yellow}Network error, trying fallback...${colors.reset}`);
+            const fallback = loadFromFallback(fallbackFile, sourceName);
+            if (fallback) resolve(fallback);
+            else reject(e);
+        });
     });
 }
 
-// Helper: Fetch Malicious JSON
-function fetchMaliciousJSON() {
-    return new Promise((resolve, reject) => {
-        https.get(IOC_JSON_URL, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(data);
-                    const result = {};
-                    // Format: { "pkgName": { "versions": [] } }
-                    for (const [pkg, details] of Object.entries(json)) {
-                        result[pkg] = details.versions || [];
-                    }
-                    resolve(result);
-                } catch (e) { reject(e); }
-            });
-        }).on('error', reject);
-    });
+// Helper: Parse Wiz CSV
+function parseWizCSV(data) {
+    const lines = data.split('\n').filter(l => l.trim() !== '');
+    const result = {};
+    const startIdx = lines[0].toLowerCase().includes('package') ? 1 : 0;
+    for (let i = startIdx; i < lines.length; i++) {
+        const parts = lines[i].split(',');
+        if (parts.length >= 2) {
+            const rawName = parts[0].replace(/["']/g, '').trim();
+            const rawVer = parts[1].replace(/["'=<>v\s]/g, '');
+            if (rawName && rawVer) {
+                if (!result[rawName]) result[rawName] = [];
+                result[rawName].push(rawVer);
+            }
+        }
+    }
+    return result;
+}
+
+// Helper: Parse Malicious JSON
+function parseMaliciousJSON(data) {
+    try {
+        const json = JSON.parse(data);
+        const result = {};
+        // Format: { "pkgName": { "versions": [] } }
+        for (const [pkg, details] of Object.entries(json)) {
+            result[pkg] = details.versions || [];
+        }
+        return result;
+    } catch (e) {
+        console.log(`    > Error parsing JSON: ${e.message}`);
+        return {};
+    }
 }
 
 // --- 3. Path Discovery (Fixed for Windows NVM) ---
@@ -653,12 +739,13 @@ async function uploadReport(csvContent, userInfo) {
     const scanPath = pathArg || process.cwd();
     const isFullScan = args.includes('--full-scan');
     const shouldUpload = !args.includes('--no-upload');
+    const noCache = args.includes('--no-cache');
     
     // Determine scan mode
     const isProjectOnlyMode = pathArg && !isFullScan;
 
     const userInfo = getUserInfo();
-    const badPackages = await fetchThreats();
+    const badPackages = await fetchThreats(noCache);
     
     console.log(`\n${colors.cyan}[4/5] Starting Deep Scan...${colors.reset}`);
     

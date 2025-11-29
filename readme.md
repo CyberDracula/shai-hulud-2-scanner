@@ -10,6 +10,7 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 * **Dual Threat Intelligence:** Automatically syncs with two IOC sources:
   * [Wiz Research](https://github.com/wiz-sec-public/wiz-research-iocs) - Official Shai-Hulud 2.0 packages (CSV)
   * [Hemachandsai Malicious Packages](https://github.com/hemachandsai/shai-hulud-malicious-packages) - Extended denylist (JSON)
+* **Smart Caching:** IOC data is cached for 30 minutes to reduce network requests. Automatic fallback to offline data if network is unavailable.
 * **Deep NVM Support:** Automatically detects NVM installations (Windows/macOS/Linux) and scans inside every installed Node version.
 * **Forensic Scan:** Checks for physical malware files (setup_bun.js, bun_environment.js) regardless of version numbers.
 * **Metadata Scan:** Validates installed packages against live threat intelligence feeds.
@@ -50,6 +51,14 @@ To scan both system caches AND a specific directory, use the `--full-scan` flag:
 
     node scan.js C:\Projects\MyApp --full-scan
 
+### Advanced Options
+
+**Bypass Cache (Force Fresh Download)**
+
+IOC data is cached for 30 minutes. To force a fresh download:
+
+    node scan.js --no-cache
+
 ### Optional: Organization Reporting
 
 **For companies/organizations only:** If you want to centrally aggregate scan results across multiple machines, you can configure automatic report uploads:
@@ -87,9 +96,24 @@ The tool categorizes findings into five types:
 | **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or artifact. |
 | **SAFE_MATCH** | 🔵 **INFO** | Package name matches a target, but the version is safe | No action needed. Logged for audit purposes. |
 
+## 🔄 Updating Offline Fallback Files
+
+The scanner includes offline fallback IOC files in the `fallback/` directory. To keep them current:
+
+```bash
+node update-fallbacks.js
+```
+
+This utility:
+- Downloads the latest threat intelligence from both sources
+- Shows current file status (age and size)
+- Updates the fallback files used when offline
+- Run this periodically to maintain up-to-date offline data
+
 ## Disclaimer
 
 This tool is provided "as is" to assist in detection. It relies on public IOCs from Wiz Research. False negatives are possible if the malware authors change file names or package versions. Always perform manual verification on critical systems.
 
 ## Contributing
+
 Contributions are welcome! Please submit issues or pull requests on the GitHub repository.
