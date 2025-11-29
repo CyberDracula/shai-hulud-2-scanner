@@ -1,6 +1,6 @@
-# Shai-Hulud 2.0 Malware Scanner
+# Shai-Hulud 1.0/2.0 Malware Scanner
 
-A forensic auditing tool designed to detect the Shai-Hulud 2.0 (and related) npm supply chain attacks. It scans local caches, global installations, and project directories against the IOCs (Indicators of Compromise) provided by Wiz Research.
+A forensic auditing tool designed to detect the Shai-Hulud 1.0/2.0 (and related) npm supply chain attacks. It scans local caches, global installations, and project directories against the IOCs (Indicators of Compromise) provided by Wiz Research.
 
 READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack
 
@@ -44,12 +44,16 @@ Scans all system caches (npm, Yarn, pnpm, NVM) and the current directory. **Gene
 Pass a path to scan **only that specific project directory** (skips system caches for faster scanning):
 
     node scan.js C:\Projects\MyApp
+    or
+    node scan.js /home/user/projects/myapp
 
 ### Full System Scan with Custom Path
 
 To scan both system caches AND a specific directory, use the `--full-scan` flag:
 
     node scan.js C:\Projects\MyApp --full-scan
+    or
+    node scan.js /home/user/projects/myapp --full-scan
 
 ### Advanced Options
 
@@ -84,17 +88,150 @@ IOC data is cached for 30 minutes. To force a fresh download:
 
 ## Interpreting the Report (shai-hulud-report.csv)
 
-The tool categorizes findings into five types:
+The tool categorizes findings into different severity levels. Understanding what each means is critical for proper response.
 
 | Finding Type | Severity | Description | Action Required |
 |-------------|----------|-------------|-----------------|
-| **FORENSIC_MATCH** | 🔴 **CRITICAL** | Actual malware files (setup_bun.js) were found on disk | ⚠️ **DELETE IMMEDIATELY.** Rotate secrets. |
-| **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where all versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** |
-| **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check package-lock.json. |
-| **LOCKFILE_HIT** | 🟠 **HIGH** | The compromised version is defined in your lockfile, meaning it will be installed next time you run npm install | Delete package-lock.json and run 'npm install' to regenerate it with safe versions. |
-| **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete `package-lock.json` & remove dependency. |
-| **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or artifact. |
+| **FORENSIC_MATCH** | 🔴 **CRITICAL** | Actual malware files (setup_bun.js, bun_environment.js) were found on disk | ⚠️ **SYSTEM COMPROMISED.** See emergency response steps below. |
+| **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below. |
+| **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check lockfiles. Clear caches. |
+| **LOCKFILE_HIT** | 🟠 **HIGH** | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install` | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate. |
+| **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete lockfile, remove dependency, regenerate with safe versions. |
+| **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or cleanup artifact. |
 | **SAFE_MATCH** | 🔵 **INFO** | Package name matches a target, but the version is safe | No action needed. Logged for audit purposes. |
+
+### 🚨 Emergency Response Steps (If FORENSIC_MATCH or WILDCARD_MATCH Found)
+
+**Your system has been compromised. The malware may have already stolen credentials.**
+
+#### 1. Immediate Actions
+
+**Windows (PowerShell):**
+
+```powershell
+# Stop all package managers and builds
+Stop-Process -Name node, npm, yarn, pnpm -Force -ErrorAction SilentlyContinue
+
+# Clear all caches
+npm cache clean --force
+yarn cache clean --all
+pnpm store prune
+Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+**macOS/Linux (Bash):**
+
+```bash
+# Stop all package managers and builds
+killall -9 node npm yarn pnpm 2>/dev/null
+
+# Clear all caches
+npm cache clean --force
+yarn cache clean --all
+pnpm store prune
+rm -rf node_modules
+```
+
+#### 2. Check for Backdoors
+
+**Windows (PowerShell):**
+
+```powershell
+# Look for malicious GitHub workflows
+Get-ChildItem -Path .github\workflows -Filter "discussion.yaml" -Recurse -ErrorAction SilentlyContinue
+Get-ChildItem -Path .github\workflows -Filter "formatter_*.yml" -Recurse -ErrorAction SilentlyContinue
+```
+
+**macOS/Linux (Bash):**
+
+```bash
+# Look for malicious GitHub workflows
+find .github/workflows -name "discussion.yaml" 2>/dev/null
+find .github/workflows -name "formatter_*.yml" 2>/dev/null
+```
+
+**Check for self-hosted runners (named "SHA1HULUD"):**
+
+Visit: `https://github.com/<your-org>/<repo>/settings/actions/runners`
+
+#### 3. Rotate ALL Credentials (Assume Breach)
+
+The malware targets these secrets:
+
+- **GitHub:** Personal Access Tokens (PATs), deploy keys, Actions secrets
+- **Cloud Providers:** AWS credentials (AKIA keys), GCP service accounts, Azure tokens
+- **Package Managers:** npm tokens, registry credentials
+- **Environment Variables:** All API keys, database passwords, service tokens
+- **SSH Keys:** Regenerate all SSH keys that were on the infected machine
+
+#### 4. Search for Exposed Secrets
+
+Your credentials may have been published to public GitHub repositories:
+
+```powershell
+# Search GitHub for your organization's exposed data
+# Visit: https://github.com/search?q="Shai-Hulud"+OR+"SHA1-HULUD"+"<your-org-name>"&type=repositories
+```
+
+**⚠️ Cross-Victim Exposure:** Your secrets may appear in repositories owned by OTHER victims. You must search broadly.
+
+#### 5. Clean and Rebuild
+
+**Windows (PowerShell):**
+
+```powershell
+# Remove lockfiles
+Remove-Item package-lock.json, yarn.lock, npm-shrinkwrap.json -ErrorAction SilentlyContinue
+
+# Remove the malicious package from package.json (manually edit)
+
+# Reinstall with safe versions
+npm install
+
+# Verify no malware files remain
+Get-ChildItem -Recurse -Include setup_bun.js, bun_environment.js, truffleSecrets.json, cloud.json, contents.json, environment.json, actionsSecrets.json
+```
+
+**macOS/Linux (Bash):**
+
+```bash
+# Remove lockfiles
+rm -f package-lock.json yarn.lock npm-shrinkwrap.json
+
+# Remove the malicious package from package.json (manually edit)
+
+# Reinstall with safe versions
+npm install
+
+# Verify no malware files remain
+find . -type f \( -name "setup_bun.js" -o -name "bun_environment.js" -o -name "truffleSecrets.json" -o -name "cloud.json" -o -name "contents.json" -o -name "environment.json" -o -name "actionsSecrets.json" \)
+```
+
+#### 6. CI/CD Pipeline Review
+
+**LOCKFILE_HIT is especially dangerous in CI/CD environments:**
+
+- Malware executes during `preinstall` (before your code runs)
+- Runs synchronously in CI (blocks until complete exfiltration)
+- May attempt Docker privilege escalation
+- Can modify sudoers for persistent root access
+
+**Action:** Review all CI/CD logs from the past 30 days for:
+- Unexpected network connections
+- Failed privilege escalation attempts
+- New GitHub runners registered
+- Unusual workflow executions
+
+### Understanding LOCKFILE_HIT Risk
+
+When found in **both project and cache**, this means:
+
+1. **Automatic Reinfection:** Every `npm install` will reinstall the malware
+2. **Team-Wide Exposure:** All developers who clone the repo will be infected
+3. **CI/CD Compromise:** Every pipeline run will execute the malware
+4. **Container Builds:** Every Docker build will be compromised
+
+**The lockfile acts as a time bomb** - the malware will keep coming back until you remove it from the lockfile AND rotate all credentials.
 
 ## 🔄 Updating Offline Fallback Files
 
