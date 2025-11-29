@@ -83,6 +83,7 @@ The tool categorizes findings into five types:
 | **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where all versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** |
 | **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check package-lock.json. |
 | **LOCKFILE_HIT** | 🟠 **HIGH** | The compromised version is defined in your lockfile, meaning it will be installed next time you run npm install | Delete package-lock.json and run 'npm install' to regenerate it with safe versions. |
+| **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete `package-lock.json` & remove dependency. |
 | **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or artifact. |
 | **SAFE_MATCH** | 🔵 **INFO** | Package name matches a target, but the version is safe | No action needed. Logged for audit purposes. |
 
