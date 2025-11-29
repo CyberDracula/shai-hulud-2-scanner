@@ -459,25 +459,127 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
 }
 
-function checkLockfile(lockPath, badPackages, type) {
-    // Simplified lockfile check
-    try {
-        const content = fs.readFileSync(lockPath, 'utf8');
-        for (const [pkg, versions] of Object.entries(badPackages)) {
-            if (content.includes(pkg)) {
-                versions.forEach(ver => {
-                    if (content.includes(ver)) {
-                         detectedIssues.push({
-                            type: 'LOCKFILE_HIT',
+function checkDependenciesRecursive(deps, badPackages, lockPath) {
+    for (const [pkg, details] of Object.entries(deps)) {
+        if (badPackages[pkg]) {
+            checkVersionMatch(pkg, details.version, badPackages[pkg], lockPath, 'NPM_LOCK_V1');
+        }
+        if (details.dependencies) {
+            checkDependenciesRecursive(details.dependencies, badPackages, lockPath);
+        }
+    }
+}
+
+function checkVersionMatch(pkg, ver, badVersions, lockPath, type) {
+    if (!ver) return;
+    
+    if (badVersions.includes(ver)) {
+        detectedIssues.push({
+            type: 'LOCKFILE_HIT',
+            package: pkg,
+            version: ver,
+            location: lockPath,
+            details: `Exact match in ${type}`
+        });
+    }
+    else if (badVersions.includes('*')) {
+        detectedIssues.push({
+            type: 'WILDCARD_LOCK_HIT',
+            package: pkg,
+            version: ver,
+            location: lockPath,
+            details: `Wildcard match in ${type}`
+        });
+    }
+}
+
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function checkLockfile(lockPath, badPackages) {
+    const fileName = path.basename(lockPath);
+    
+    // Read file (safely)
+    let content;
+    try { content = fs.readFileSync(lockPath, 'utf8'); } catch(e) { return; }
+
+    // --- 1. NPM Lockfile (Accurate JSON Parsing) ---
+    if (fileName === 'package-lock.json' || fileName === 'npm-shrinkwrap.json') {
+        try {
+            const json = JSON.parse(content);
+            
+            // Check v2/v3 "packages" section (Most accurate)
+            if (json.packages) {
+                for (const [key, details] of Object.entries(json.packages)) {
+                    // key is "node_modules/pkgName" -> grab just pkgName
+                    const pkgName = key.replace(/^.*node_modules\//, '');
+                    
+                    if (badPackages[pkgName]) {
+                        checkVersionMatch(pkgName, details.version, badPackages[pkgName], lockPath, 'NPM_LOCK_V3');
+                    }
+                }
+            }
+            
+            // Check v1 "dependencies" section (Recursive)
+            if (json.dependencies) {
+                checkDependenciesRecursive(json.dependencies, badPackages, lockPath);
+            }
+
+        } catch (e) {
+            console.log(`${colors.yellow}    [!] Warning: Could not parse ${lockPath} as JSON.${colors.reset}`);
+        }
+    }
+    
+    // --- 2. Yarn Lockfile (Stricter Regex Check) ---
+    else if (fileName === 'yarn.lock') {
+        for (const [pkg, badVersions] of Object.entries(badPackages)) {
+            // Yarn Entry Format:
+            // "package-name@^1.0.0":
+            //   version "1.2.3"
+            
+            // We loop through every BAD version to see if it exists in the block for this package
+            badVersions.forEach(badVer => {
+                // Regex Explanation:
+                // 1. Literal package name (escaped)
+                // 2. @ character
+                // 3. Any characters (the range) until the colon :
+                // 4. Newline + Whitespace
+                // 5. Literal 'version' + space + quote + BAD VERSION + quote
+                const strictRegex = new RegExp(
+                    `"?${escapeRegExp(pkg)}@.+?:\\s+version "${escapeRegExp(badVer)}"`, 
+                    'm' // Multiline mode is usually default in regex, but good to be implicit via structure
+                );
+                
+                // Wildcard support for Yarn ('*')
+                const isWildcard = badVer === '*';
+                // For wildcard, we just check if the package block exists at all
+                const wildcardRegex = new RegExp(`"?${escapeRegExp(pkg)}@.+?:`, 'g');
+
+                if (isWildcard) {
+                    if (wildcardRegex.test(content)) {
+                        detectedIssues.push({
+                            type: 'WILDCARD_LOCK_HIT',
                             package: pkg,
-                            version: ver,
-                            location: lockPath
+                            version: 'ALL',
+                            location: lockPath,
+                            details: 'Yarn Lock match (Wildcard)'
                         });
                     }
-                });
-            }
+                } else {
+                    if (strictRegex.test(content)) {
+                        detectedIssues.push({
+                            type: 'LOCKFILE_HIT',
+                            package: pkg,
+                            version: badVer,
+                            location: lockPath,
+                            details: 'Yarn Lock match (Strict)'
+                        });
+                    }
+                }
+            });
         }
-    } catch(e) {}
+    }
 }
 
 // --- 6. Reporting ---
