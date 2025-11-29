@@ -5,6 +5,30 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-11-29
+
+### Added
+
+- **Behavioral Heuristics (Script Scanner):** Expanded detection for high-confidence malicious install scripts
+  - Detects piping raw GitHub content to shell (`curl|wget … githubusercontent.com | sh`)
+  - Flags decode-then-exec sequences (`base64|b64 … | sh`)
+  - Detects Docker privilege-escalation indicators (`docker run --privileged`, `-v /:/host`)
+  - Detects GitHub workflow backdoor artifacts (`.github/workflows/discussion.yaml`)
+- **Suspicious Behavior Warnings:** Broadened coverage for obfuscation and exfil
+  - Hex/base64 decodes via `Buffer.from(..., 'hex'|'base64')`, `Function(...)`
+  - GitHub API/Actions artifact usage as potential exfil signals
+  - Shelling out to `curl|wget|nc|bash|sh`; backdoor primitives (`nc`, `socat`)
+- **Depth Control:** Configurable traversal depth for directory scanning
+  - New constant `DEFAULT_MAX_SCAN_DEPTH` (default: 5)
+  - CLI flag `--depth=<n>` or `--depth <n>` to override per run
+
+### Changed
+
+- **Whitelist Performance:** Converted `SCRIPT_WHITELIST` to a `Set` and now use `has()` for O(1) checks
+- **Whitelist Coverage:** Extended `SCRIPT_WHITELIST_REGEX` to include common safe hooks
+  - `opencollective-postinstall`, `node scripts/postinstall(.js)`, `electron-builder install-app-deps`
+  - `lerna bootstrap`, `nx/turbo run`, `esbuild`, `node-pre-gyp install`
+
 ## [1.1.0] - 2025-11-29
 
 ### Added

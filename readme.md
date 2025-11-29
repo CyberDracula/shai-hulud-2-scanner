@@ -63,6 +63,18 @@ IOC data is cached for 30 minutes. To force a fresh download:
 
     node scan.js --no-cache
 
+#### Limit Directory Traversal Depth
+
+Control how deep the scanner traverses directories (default: 5). Useful to speed up scans or focus locally:
+
+    node scan.js --depth=3
+    node scan.js C:\Projects\MyApp --full-scan --depth 7
+
+Notes:
+
+* Accepts `--depth=<n>` or `--depth <n>` formats
+* Applies to both project-only and full-system scan modes
+
 ### Optional: Organization Reporting
 
 **For companies/organizations only:** If you want to centrally aggregate scan results across multiple machines, you can configure automatic report uploads:
@@ -94,11 +106,35 @@ The tool categorizes findings into different severity levels. Understanding what
 |-------------|----------|-------------|-----------------|
 | **FORENSIC_MATCH** | 🔴 **CRITICAL** | Actual malware files (setup_bun.js, bun_environment.js) were found on disk | ⚠️ **SYSTEM COMPROMISED.** See emergency response steps below. |
 | **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below. |
+| **CRITICAL_SCRIPT** | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement. |
 | **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check lockfiles. Clear caches. |
 | **LOCKFILE_HIT** | 🟠 **HIGH** | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install` | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate. |
 | **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete lockfile, remove dependency, regenerate with safe versions. |
 | **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or cleanup artifact. |
+| **SCRIPT_WARNING** | 🟡 **WARNING** | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`) | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket. |
 | **SAFE_MATCH** | 🔵 **INFO** | Package name matches a target, but the version is safe | No action needed. Logged for audit purposes. |
+
+### Behavioral Heuristics (Install Script Scanner)
+
+The scanner analyzes common lifecycle hooks (`preinstall`, `install`, `postinstall`, `prepublish`, `prepare`) and flags:
+
+* High-confidence malicious patterns: piping remote content to shell, base64→shell chains, Docker `--privileged` and host mounts, workflow backdoor files
+* Suspicious indicators: obfuscation via `Buffer.from(..., 'hex'|'base64')`, dynamic `Function(...)`, GitHub API/artifact usage, backdoor primitives (`nc`, `socat`)
+* Whitelisted safe scripts: typical tooling like `tsc`, `node-gyp`, `prebuild-install`, `opencollective-postinstall`, `electron-builder install-app-deps`, `lerna bootstrap`, `nx/turbo run`, `esbuild`
+
+#### Indicators (What you may see in `Issue_Type` and `Details`)
+
+The scanner emits normalized indicator tags to help triage:
+
+* `REMOTE_CODE_EXEC`: Downloading or piping remote content into shell; subshell/backtick curl/wget; `bash -c` with network fetch
+* `OBFUSCATION`: Base64/hex decoding, `String.fromCharCode`, escape sequences, packed or encoded payloads
+* `CODE_INJECTION`: `eval`, `Function(...)`, direct `child_process` execution, sync exec/spawn usage
+* `SHAI_HULUD`: References to loader or payload artifacts (`setup_bun`, `bun_environment`, signature tokens)
+* `PERSISTENCE`: CI/CD workflow backdoor files (e.g., `.github/workflows/discussion.yml`)
+* `PRIV_ESC`: Docker `--privileged` runs or host filesystem mounts (`-v /:/host`)
+* `INSECURE_NETWORK`: Plain `http://` network calls in install-time scripts
+* `EXFIL_ATTEMPT`: GitHub API interactions or Actions artifact uploads from lifecycle scripts
+* `BACKDOOR_PRIMITIVE`: Use of `nc` or `socat` for reverse shells or listeners
 
 ### 🚨 Emergency Response Steps (If FORENSIC_MATCH or WILDCARD_MATCH Found)
 

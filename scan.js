@@ -48,6 +48,12 @@ const UPLOAD_API_URL = 'https://YOUR-LAMBDA-URL.lambda-url.us-east-1.on.aws/';
 const API_KEY = 'secure-me-1234';
 // ---------------------
 
+// --- SCAN SETTINGS ---
+// Default maximum directory traversal depth when scanning.
+// Can be overridden via CLI flag: --depth=<number>
+const DEFAULT_MAX_SCAN_DEPTH = 5;
+// ---------------------
+
 const colors = {
     red: '\x1b[31m',
     green: '\x1b[32m',
@@ -56,6 +62,90 @@ const colors = {
     reset: '\x1b[0m',
     dim: '\x1b[2m'
 };
+
+
+ // --- FORENSIC file list ---
+
+const malwareFiles = [
+    // Active Payloads (Shai-Hulud 2.0)
+    'setup_bun.js', 
+    'bun_environment.js',
+    
+    // Active Payloads (Shai-Hulud 1.0)
+    'bundle.js', 
+
+    // Exfiltration Evidence (If found, data was likely stolen)
+    'truffleSecrets.json',
+    'cloud.json',
+    'contents.json',
+    'environment.json',
+    'actionsSecrets.json'
+];
+
+// --- HEURISTIC CONFIGURATION ---
+
+const SCRIPT_WHITELIST = new Set([
+    'husky install', 'husky', 'is-ci || husky install',
+    'ngcc', 'ngcc --properties es2015 browser module main', 'ivy-ngcc',
+    'tsc', 'tsc -p tsconfig.json', 'tsc --build',
+    'rimraf', 'rimraf dist', 'shx',
+    'prebuild-install', 'node-gyp rebuild', 'node-pre-gyp install --fallback-to-build',
+    'patch-package', 'esbuild',
+    'node scripts/postinstall.js', 'node scripts/postinstall',
+    'lerna bootstrap', 'nx',
+    'electron-builder install-app-deps',
+    'exit 0', 'true', 'echo'
+]);
+
+const SCRIPT_WHITELIST_REGEX = [
+    /^echo\s/, /^rimraf\s/, /^shx\s/, /^tsc(\s|$)/, /^ngcc(\s|$)/,
+    /^node-gyp\s/, /^prebuild-install/, /^husky(\s|$)/, /^is-ci\s/,
+    /^opencollective(-postinstall)?/, /^patch-package/,
+    /^node\s+scripts\/postinstall(\.js)?$/, /^electron-builder\s+install-app-deps/,
+    /^lerna\s+bootstrap/, /^(nx|turbo)\s+run/, /^esbuild(\s|$)/,
+    /^node-pre-gyp\s+install(\s|$)/
+];
+
+const CRITICAL_PATTERNS = [
+    { pattern: /curl\s+.*\|\s*(sh|bash|zsh)/i, desc: 'Curl piped to shell', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /wget\s+.*\|\s*(sh|bash|zsh)/i, desc: 'Wget piped to shell', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /curl\s+.*>\s*[^|]+\s*&&\s*(sh|bash|chmod)/i, desc: 'Curl download & exec', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /curl\s+.*githubusercontent\.com\/.*\|\s*(sh|bash|zsh)/i, desc: 'Pipe raw GitHub content to shell', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /wget\s+.*raw\.githubusercontent\.com\/.*\|\s*(sh|bash|zsh)/i, desc: 'Pipe raw GitHub content to shell', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /\b(b64|base64)\b[\s\S]*\|\s*(sh|bash)/i, desc: 'Decode then execute via shell', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /base64\s+(-d|--decode)/i, desc: 'Base64 decoding', indicator: 'OBFUSCATION' },
+    { pattern: /\beval\s*\(/, desc: 'Eval statement', indicator: 'CODE_INJECTION' },
+    { pattern: /setup_bun/i, desc: 'Shai-Hulud Loader', indicator: 'SHAI_HULUD' },
+    { pattern: /bun_environment/i, desc: 'Shai-Hulud Payload', indicator: 'SHAI_HULUD' },
+    { pattern: /SHA1HULUD/i, desc: 'Shai-Hulud Signature', indicator: 'SHAI_HULUD' },
+    { pattern: /node\s+-e\s+["']require\s*\(\s*["']child_process["']\s*\)/, desc: 'Hidden child_process', indicator: 'CODE_INJECTION' },
+    { pattern: /child_process.*exec.*\$\(/, desc: 'Shell command via child_process', indicator: 'CODE_INJECTION' },
+    { pattern: /\$\(curl/i, desc: 'Subshell curl', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /`curl/i, desc: 'Backtick curl', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /bash\s+-c\s+["'].*curl/i, desc: 'bash -c curl', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /curl\s+.*-o\s+\S+\s*&&\s*(sh|bash|chmod)/i, desc: 'curl save & exec', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /wget\s+.*-O\s+\S+\s*&&\s*(sh|bash|chmod)/i, desc: 'wget save & exec', indicator: 'REMOTE_CODE_EXEC' },
+    { pattern: /require\s*\(\s*["']child_process["']\s*\)\.\s*(exec|execSync|spawn|spawnSync)/i, desc: 'Direct child_process call', indicator: 'CODE_INJECTION' },
+    { pattern: /\b(execSync|spawnSync|execFileSync)\s*\(/, desc: 'Sync process execution', indicator: 'CODE_INJECTION' },
+    { pattern: /\.github\/workflows\/discussion\.ya?ml/i, desc: 'GitHub workflow backdoor', indicator: 'PERSISTENCE' },
+    { pattern: /docker\s+run\s+[^\n]*--privileged/i, desc: 'Privileged Docker run', indicator: 'PRIV_ESC' },
+    { pattern: /-v\s+\/:\/host\b/i, desc: 'Host mount in container', indicator: 'PRIV_ESC' }
+];
+
+const WARNING_PATTERNS = [
+    { pattern: /http:\/\//, desc: 'Unencrypted HTTP', indicator: 'INSECURE_NETWORK' },
+    { pattern: /\\x[0-9a-fA-F]{2}/, desc: 'Hex-encoded string', indicator: 'OBFUSCATION' },
+    { pattern: /String\.fromCharCode/, desc: 'Char code obfuscation', indicator: 'OBFUSCATION' },
+    { pattern: /atob\s*\(/, desc: 'Base64 atob decode', indicator: 'OBFUSCATION' },
+    { pattern: /Buffer\.from\s*\([^)]+,\s*['"]base64['"]\)/, desc: 'Buffer base64 decode', indicator: 'OBFUSCATION' },
+    { pattern: /Buffer\.from\s*\([^)]+,\s*['"]hex['"]\)/, desc: 'Buffer hex decode', indicator: 'OBFUSCATION' },
+    { pattern: /Function\s*\([^)]*\)/, desc: 'Dynamic function creation', indicator: 'OBFUSCATION' },
+    { pattern: /actions\/upload-artifact/i, desc: 'GitHub Actions artifact usage', indicator: 'EXFIL_ATTEMPT' },
+    { pattern: /https?:\/\/api\.github\.com\/(repos|gists|uploads)/i, desc: 'GitHub API interaction', indicator: 'EXFIL_ATTEMPT' },
+    { pattern: /child_process\.(exec|spawn|execSync|spawnSync)\([^)]*(curl|wget|nc|bash|sh)/i, desc: 'Shelling out to network tools', indicator: 'CODE_INJECTION' },
+    { pattern: /\bnc\b\s+(-[a-zA-Z]+\s+)*\S+/i, desc: 'Netcat usage', indicator: 'BACKDOOR_PRIMITIVE' },
+    { pattern: /\bsocat\b\s+/i, desc: 'socat usage', indicator: 'BACKDOOR_PRIMITIVE' }
+];
 
 const detectedIssues = [];
 
@@ -391,8 +481,8 @@ function getSearchPaths() {
 }
 
 // --- 4. Scanning Logic ---
-function scanDir(currentPath, badPackages, depth = 0) {
-    if (depth > 5) return; 
+function scanDir(currentPath, badPackages, depth = 0, maxDepth = DEFAULT_MAX_SCAN_DEPTH) {
+    if (depth > maxDepth) return; 
 
     if (path.basename(currentPath) === 'node_modules') {
         scanNodeModules(currentPath, badPackages);
@@ -412,7 +502,7 @@ function scanDir(currentPath, badPackages, depth = 0) {
             scanNodeModules(fullPath, badPackages);
         }
         else if (entry.isDirectory() && !entry.name.startsWith('.')) {
-            scanDir(fullPath, badPackages, depth + 1);
+            scanDir(fullPath, badPackages, depth + 1, maxDepth);
         }
     }
 }
@@ -443,21 +533,6 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
     const pJsonPath = path.join(pkgPath, 'package.json');
     
     // 1. FORENSIC CHECK (Files exist?)
-    const malwareFiles = [
-    // Active Payloads (Shai-Hulud 2.0)
-    'setup_bun.js', 
-    'bun_environment.js',
-    
-    // Active Payloads (Shai-Hulud 1.0)
-    'bundle.js', 
-
-    // Exfiltration Evidence (If found, data was likely stolen)
-    'truffleSecrets.json',
-    'cloud.json',
-    'contents.json',
-    'environment.json',
-    'actionsSecrets.json'
-];
     for (const file of malwareFiles) {
         if (fs.existsSync(path.join(pkgPath, file))) {
             const msg = `[!!!] CRITICAL: MALWARE FILE FOUND: ${file} in ${pkgName}`;
@@ -473,26 +548,32 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         }
     }
 
-    // 2. TARGET CHECK
-    // If the name is not in our list, we stop here.
-    if (!badPackages[pkgName]) return;
-
-    // 3. GHOST CHECK (Folder exists, matching bad name, but no package.json)
+    // 2. GHOST CHECK (Folder exists, matching bad name, but no package.json)
     if (!fs.existsSync(pJsonPath)) {
-        console.log(`${colors.yellow}    [?] WARNING: Found folder "${pkgName}" (Targeted Name) but missing package.json${colors.reset}`);
-        detectedIssues.push({
-            type: 'GHOST_PACKAGE',
-            package: pkgName,
-            version: 'UNKNOWN',
-            location: pkgPath,
-            details: 'Directory exists but package.json is missing'
-        });
-        return;
+        // Only report "Ghost" if it WAS a targeted package
+        if (badPackages[pkgName]) {
+            console.log(`${colors.yellow}    [?] WARNING: Ghost folder "${pkgName}"${colors.reset}`);
+            detectedIssues.push({
+                type: 'GHOST_PACKAGE',
+                package: pkgName,
+                version: 'UNKNOWN',
+                location: pkgPath,
+                details: 'Targeted package folder exists but package.json is missing'
+            });
+        }
+        return; // Stop because there is no JSON to read
     }
 
-    // 4. METADATA CHECK
+    // 3. METADATA CHECK & HEURISTIC CHECK
     try {
         const content = JSON.parse(fs.readFileSync(pJsonPath, 'utf8'));
+        // A. HEURISTIC SCRIPT CHECK (Run on everything)
+        checkScripts(content, pkgName, pkgPath);
+        
+        // B. TARGET CHECK (Stop here if package is not on the hit-list)
+        if (!badPackages[pkgName]) return;
+
+        // C. VERSION CHECK
         const version = content.version;
         const targetVersions = badPackages[pkgName];
         
@@ -525,25 +606,52 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         });
     }
 
-    // 5. BEHAVIORAL CHECK (Look for the "Scar")
-    try {
-        const content = JSON.parse(fs.readFileSync(pJsonPath, 'utf8'));
-        const scripts = JSON.stringify(content.scripts || {});
-        
-        // The specific signature of Shai-Hulud 2.0
-        if (scripts.includes('setup_bun.js') || scripts.includes('bun_environment.js')) {
-            console.log(`${colors.red}    [!] ALERT: Malicious script entry found in package.json (Files might be missing)${colors.reset}`);
-            detectedIssues.push({
-                type: 'CONFIG_MATCH',
-                package: pkgName,
-                version: content.version || 'UNKNOWN',
-                location: pkgPath,
-                details: 'package.json contains "node setup_bun.js"'
-            });
-        }
-    } catch (e) {}
+} 
 
+// --- Helper Function: Heuristic Script Scanner // BEHAVIORAL CHECK (Look for the "Scar") ---
+function checkScripts(content, pkgName, pkgPath) {
+    if (!content.scripts) return;
+    const hooks = ['preinstall', 'install', 'postinstall', 'prepublish', 'prepare'];
+
+    for (const hook of hooks) {
+        if (!content.scripts[hook]) continue;
+        const cmd = content.scripts[hook];
+
+        // 1. Whitelist Check (Pass immediately if safe)
+        if (SCRIPT_WHITELIST.has(cmd)) continue;
+        const isWhitelistedRegex = SCRIPT_WHITELIST_REGEX.some(regex => regex.test(cmd));
+        if (isWhitelistedRegex) continue;
+
+        // 2. Critical Check
+        for (const rule of CRITICAL_PATTERNS) {
+            if (rule.pattern.test(cmd)) {
+                console.log(`${colors.red}    [!] SCRIPT ALERT: ${pkgName} [${hook}] -> ${rule.desc}${colors.reset}`);
+                detectedIssues.push({
+                    type: 'CRITICAL_SCRIPT',
+                    package: pkgName,
+                    version: content.version || 'UNKNOWN',
+                    location: pkgPath,
+                    details: `${rule.indicator}: ${rule.desc}`
+                });
+                return; // Stop checking this script (Priority 1)
+            }
+        }
+
+        // 3. Warning Check
+        for (const rule of WARNING_PATTERNS) {
+            if (rule.pattern.test(cmd)) {
+                detectedIssues.push({
+                    type: 'SCRIPT_WARNING',
+                    package: pkgName,
+                    version: content.version || 'UNKNOWN',
+                    location: pkgPath,
+                    details: `${rule.indicator}: ${rule.desc}`
+                });
+            }
+        }
+    }
 }
+
 
 function checkDependenciesRecursive(deps, badPackages, lockPath) {
     for (const [pkg, details] of Object.entries(deps)) {
@@ -740,6 +848,17 @@ async function uploadReport(csvContent, userInfo) {
     const isFullScan = args.includes('--full-scan');
     const shouldUpload = !args.includes('--no-upload');
     const noCache = args.includes('--no-cache');
+    // Parse optional depth override: supports "--depth=7" or "--depth 7"
+    let maxDepth = DEFAULT_MAX_SCAN_DEPTH;
+    const depthEqArg = args.find(a => a.startsWith('--depth='));
+    const depthIdx = args.findIndex(a => a === '--depth');
+    if (depthEqArg) {
+        const val = Number(depthEqArg.split('=')[1]);
+        if (!Number.isNaN(val) && val >= 0) maxDepth = val;
+    } else if (depthIdx !== -1 && args[depthIdx + 1]) {
+        const val = Number(args[depthIdx + 1]);
+        if (!Number.isNaN(val) && val >= 0) maxDepth = val;
+    }
     
     // Determine scan mode
     const isProjectOnlyMode = pathArg && !isFullScan;
@@ -753,7 +872,7 @@ async function uploadReport(csvContent, userInfo) {
         // Project-only mode: scan only the specified path
         console.log(`${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`);
         console.log(`    > Scanning Project Dir: ${scanPath}`);
-        scanDir(scanPath, badPackages);
+        scanDir(scanPath, badPackages, 0, maxDepth);
     } else {
         // Full system scan mode
         console.log(`${colors.yellow}    > Mode: Full System Scan${colors.reset}`);
@@ -762,12 +881,12 @@ async function uploadReport(csvContent, userInfo) {
         // 1. Scan System Paths (with explicit logs)
         systemPaths.forEach(p => {
             console.log(`    > Scanning System Path: ${p}`);
-            scanDir(p, badPackages);
+            scanDir(p, badPackages, 0, maxDepth);
         });
 
         // 2. Scan Local Dir
         console.log(`    > Scanning Project Dir: ${scanPath}`);
-        scanDir(scanPath, badPackages);
+        scanDir(scanPath, badPackages, 0, maxDepth);
     }
 
     // 3. Summary
