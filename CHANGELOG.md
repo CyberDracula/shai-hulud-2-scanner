@@ -5,6 +5,19 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-11-30
+
+### Added
+
+- **CI/CD Integration:** Configurable exit codes for build pipeline integration
+  - New `--fail-on` flag with three modes: `critical`, `warning`, or `off`
+  - `--fail-on=critical`: Fails build (exit 1) only on critical findings (FORENSIC_MATCH, CRITICAL_SCRIPT, VERSION_MATCH, WILDCARD_MATCH, LOCKFILE_HIT)
+  - `--fail-on=warning`: Fails build on any critical or warning findings (includes SCRIPT_WARNING, GHOST_PACKAGE, CORRUPT_PACKAGE)
+  - `--fail-on=off`: Report-only mode, always exits with code 0
+  - **Opt-in behavior**: CI/CD exit logic only activates when `--fail-on` is explicitly provided
+  - Backwards compatible: Without the flag, scanner maintains default behavior (exit 0)
+  - Perfect for Jenkins, GitHub Actions, GitLab CI, and other automation platforms
+
 ## [1.2.1] - 2025-11-29
 
 ### Fixed

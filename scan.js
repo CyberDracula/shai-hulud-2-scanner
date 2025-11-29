@@ -52,6 +52,14 @@ const API_KEY = 'secure-me-1234';
 // Default maximum directory traversal depth when scanning.
 // Can be overridden via CLI flag: --depth=<number>
 const DEFAULT_MAX_SCAN_DEPTH = 5;
+
+// CI/CD Exit Code Configuration
+// Controls when the scanner should exit with non-zero code to fail builds
+// Options: 'critical', 'warning', 'off'
+// - 'critical': Exit code 1 only on CRITICAL findings (FORENSIC_MATCH, CRITICAL_SCRIPT, VERSION_MATCH, WILDCARD_MATCH, LOCKFILE_HIT, etc.)
+// - 'warning': Exit code 1 on both CRITICAL and WARNING findings (SCRIPT_WARNING, GHOST_PACKAGE, CORRUPT_PACKAGE)
+// - 'off': Always exit with code 0 (report only, never fail builds)
+const DEFAULT_FAIL_ON = 'critical';
 // ---------------------
 
 const colors = {
@@ -871,6 +879,7 @@ async function uploadReport(csvContent, userInfo) {
     const isFullScan = args.includes('--full-scan');
     const shouldUpload = !args.includes('--no-upload');
     const noCache = args.includes('--no-cache');
+    
     // Parse optional depth override: supports "--depth=7" or "--depth 7"
     let maxDepth = DEFAULT_MAX_SCAN_DEPTH;
     const depthEqArg = args.find(a => a.startsWith('--depth='));
@@ -881,6 +890,18 @@ async function uploadReport(csvContent, userInfo) {
     } else if (depthIdx !== -1 && args[depthIdx + 1]) {
         const val = Number(args[depthIdx + 1]);
         if (!Number.isNaN(val) && val >= 0) maxDepth = val;
+    }
+    
+    // Parse fail-on threshold for CI/CD: supports "--fail-on=critical" or "--fail-on critical"
+    let failOn = DEFAULT_FAIL_ON;
+    const failOnEqArg = args.find(a => a.startsWith('--fail-on='));
+    const failOnIdx = args.findIndex(a => a === '--fail-on');
+    if (failOnEqArg) {
+        const val = failOnEqArg.split('=')[1].toLowerCase();
+        if (['critical', 'warning', 'off'].includes(val)) failOn = val;
+    } else if (failOnIdx !== -1 && args[failOnIdx + 1]) {
+        const val = args[failOnIdx + 1].toLowerCase();
+        if (['critical', 'warning', 'off'].includes(val)) failOn = val;
     }
     
     // Determine scan mode
@@ -933,4 +954,36 @@ async function uploadReport(csvContent, userInfo) {
     else {
         console.log(`${colors.dim}    > Upload skipped (disabled by user).${colors.reset}`);
     }
+
+    // --- CI/CD EXIT CODE LOGIC ---
+    // Only apply exit code logic if --fail-on flag was explicitly provided
+    if (failOnEqArg || failOnIdx !== -1) {
+        const criticalTypes = ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT'];
+        const warningTypes = ['SCRIPT_WARNING', 'GHOST_PACKAGE', 'CORRUPT_PACKAGE'];
+        
+        const criticalCount = detectedIssues.filter(i => criticalTypes.includes(i.type)).length;
+        const warningCount = detectedIssues.filter(i => warningTypes.includes(i.type)).length;
+
+        if (failOn === 'off') {
+            console.log(`${colors.dim}\n[CI/CD] Exit mode: OFF - Always exiting with code 0${colors.reset}`);
+            process.exit(0);
+        } else if (failOn === 'critical') {
+            if (criticalCount > 0) {
+                console.log(`${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical finding(s) detected (--fail-on=critical)${colors.reset}`);
+                process.exit(1);
+            } else {
+                console.log(`${colors.green}\n[CI/CD] PASS: No critical findings (${warningCount} warning(s) ignored)${colors.reset}`);
+                process.exit(0);
+            }
+        } else if (failOn === 'warning') {
+            if (criticalCount > 0 || warningCount > 0) {
+                console.log(`${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical, ${warningCount} warning(s) detected (--fail-on=warning)${colors.reset}`);
+                process.exit(1);
+            } else {
+                console.log(`${colors.green}\n[CI/CD] PASS: No critical or warning findings${colors.reset}`);
+                process.exit(0);
+            }
+        }
+    }
+    // If --fail-on not provided, exit normally (code 0)
 })();

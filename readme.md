@@ -75,6 +75,55 @@ Notes:
 * Accepts `--depth=<n>` or `--depth <n>` formats
 * Applies to both project-only and full-system scan modes
 
+#### CI/CD Integration (Exit Codes)
+
+Control when the scanner fails builds based on finding severity. By default, the scanner always exits with code 0. Use `--fail-on` to enable CI/CD mode:
+
+    node scan.js --fail-on=critical
+    or
+    node scan.js /path/to/project --fail-on=critical
+
+    node scan.js --fail-on=warning
+    or
+    node scan.js /path/to/project --fail-on=warning
+
+    node scan.js --fail-on=off
+    or
+    node scan.js /path/to/project --fail-on=off
+
+**Modes:**
+
+* `--fail-on=critical`: Exit code 1 only on **CRITICAL** findings (FORENSIC_MATCH, CRITICAL_SCRIPT, VERSION_MATCH, WILDCARD_MATCH, LOCKFILE_HIT, WILDCARD_LOCK_HIT)
+* `--fail-on=warning`: Exit code 1 on **CRITICAL or WARNING** findings (includes SCRIPT_WARNING, GHOST_PACKAGE, CORRUPT_PACKAGE)
+* `--fail-on=off`: Always exit code 0 (report only, never fail builds)
+
+**Jenkins Example:**
+
+```groovy
+stage('Security Scan') {
+    steps {
+        sh 'npx @cyberdracula/shai-hulud-2-scanner --fail-on=critical'
+    }
+}
+```
+
+**GitHub Actions Example:**
+
+```yaml
+- name: Scan for Supply Chain Attacks
+  run: npx @cyberdracula/shai-hulud-2-scanner --fail-on=critical
+```
+
+**GitLab CI Example:**
+
+```yaml
+security_scan:
+  script:
+    - npx @cyberdracula/shai-hulud-2-scanner --fail-on=critical
+```
+
+> **Note:** Without the `--fail-on` flag, the scanner maintains backwards-compatible behavior (always exits 0). This ensures existing workflows are not disrupted.
+
 ### Optional: Organization Reporting
 
 **For companies/organizations only:** If you want to centrally aggregate scan results across multiple machines, you can configure automatic report uploads:
