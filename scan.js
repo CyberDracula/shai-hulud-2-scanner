@@ -545,24 +545,41 @@ async function uploadReport(csvContent, userInfo) {
 (async () => {
     console.log(`\n${colors.yellow}=== Shai-Hulud 2.0 Detector ===${colors.reset}`);
     const args = process.argv.slice(2);
-    const scanPath = args[0] && !args[0].startsWith('--') ? args[0] : process.cwd();
+    
+    // Parse arguments
+    const pathArg = args.find(arg => !arg.startsWith('--'));
+    const scanPath = pathArg || process.cwd();
+    const isFullScan = args.includes('--full-scan');
     const shouldUpload = !args.includes('--no-upload');
+    
+    // Determine scan mode
+    const isProjectOnlyMode = pathArg && !isFullScan;
 
     const userInfo = getUserInfo();
     const badPackages = await fetchThreats();
-    const systemPaths = getSearchPaths();
     
     console.log(`\n${colors.cyan}[4/5] Starting Deep Scan...${colors.reset}`);
     
-    // 1. Scan System Paths (with explicit logs)
-    systemPaths.forEach(p => {
-        console.log(`    > Scanning System Path: ${p}`);
-        scanDir(p, badPackages);
-    });
+    if (isProjectOnlyMode) {
+        // Project-only mode: scan only the specified path
+        console.log(`${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`);
+        console.log(`    > Scanning Project Dir: ${scanPath}`);
+        scanDir(scanPath, badPackages);
+    } else {
+        // Full system scan mode
+        console.log(`${colors.yellow}    > Mode: Full System Scan${colors.reset}`);
+        const systemPaths = getSearchPaths();
+        
+        // 1. Scan System Paths (with explicit logs)
+        systemPaths.forEach(p => {
+            console.log(`    > Scanning System Path: ${p}`);
+            scanDir(p, badPackages);
+        });
 
-    // 2. Scan Local Dir
-    console.log(`    > Scanning Project Dir: ${scanPath}`);
-    scanDir(scanPath, badPackages);
+        // 2. Scan Local Dir
+        console.log(`    > Scanning Project Dir: ${scanPath}`);
+        scanDir(scanPath, badPackages);
+    }
 
     // 3. Summary
     const threats = detectedIssues.filter(i => i.type !== 'SAFE_MATCH');

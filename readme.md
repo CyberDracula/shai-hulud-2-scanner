@@ -32,17 +32,23 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 
 You can run the script directly with Node, or use the provided helper scripts.
 
-### Basic Scan
+### Full System Scan (Default)
 
-Scans system caches (npm, Yarn, pnpm, NVM) and the current directory. **Generates a local CSV report only.**
+Scans all system caches (npm, Yarn, pnpm, NVM) and the current directory. **Generates a local CSV report only.**
 
     node scan.js
 
-### Scan Specific Directory
+### Project-Only Scan
 
-Pass a path to scan a specific project or drive location.
+Pass a path to scan **only that specific project directory** (skips system caches for faster scanning):
 
     node scan.js C:\Projects\MyApp
+
+### Full System Scan with Custom Path
+
+To scan both system caches AND a specific directory, use the `--full-scan` flag:
+
+    node scan.js C:\Projects\MyApp --full-scan
 
 ### Optional: Organization Reporting
 
