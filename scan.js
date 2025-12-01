@@ -113,7 +113,7 @@ const MALWARE_FILES = Object.freeze([
     'environment.json',
     'actionsSecrets.json',
     '.github/workflows/discussion.yaml',
-];
+]);
 
 // ============================================================================
 // HEURISTIC CONFIGURATION (ReDoS-hardened patterns)
