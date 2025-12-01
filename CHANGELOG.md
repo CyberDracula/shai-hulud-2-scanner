@@ -5,6 +5,109 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2025-12-01
+
+### Security
+
+- **CRITICAL: Removed Hardcoded Credentials** (CWE-798)
+  - API key and URL now read from environment variables (`SHAI_HULUD_API_KEY`, `SHAI_HULUD_API_URL`)
+  - Eliminates credential exposure in source code and version control
+
+- **CRITICAL: CSV Injection Prevention** (CWE-1236)
+  - Added `escapeCSV()` function to sanitize all user-controlled fields
+  - Prefixes dangerous characters (`=`, `+`, `-`, `@`, `\t`, `\r`) with single quote
+  - Prevents formula injection attacks when reports are opened in spreadsheet applications
+
+- **CRITICAL: ReDoS Mitigation** (CWE-1333)
+  - Replaced all unbounded regex quantifiers (`.*`, `.+`) with bounded versions
+  - Example: `curl\s+.*\|` → `curl\s+[^\s|]{1,500}\s*\|`
+  - Prevents catastrophic backtracking on malicious input
+
+- **CRITICAL: Symlink Attack Protection** (CWE-59)
+  - Added `checkSymlink()` with configurable depth limiting (`MAX_SYMLINK_DEPTH: 3`)
+  - Prevents directory traversal via symlink chains
+  - Tracks and reports skipped symlinks in scan statistics
+
+- **HIGH: Path Traversal Prevention** (CWE-22)
+  - Added `validatePath()` function for all path inputs
+  - Rejects null bytes, enforces max path length (4096 chars)
+  - Optional base directory confinement validation
+
+- **HIGH: TOCTOU Race Condition Mitigation** (CWE-367)
+  - Atomic file writes using temp file + `rename()` pattern
+  - Applies to cache files and report generation
+
+- **MEDIUM: Resource Exhaustion Protection** (CWE-400)
+  - `MAX_FILE_SIZE_BYTES`: 50 MB limit for package.json reads
+  - `MAX_LOCKFILE_SIZE_BYTES`: 100 MB limit for lockfile reads
+  - `MAX_DIRECTORIES_SCANNED`: 100,000 directory limit
+  - `MAX_PACKAGES_SCANNED`: 50,000 package limit
+  - `MAX_SCAN_DEPTH`: 10 (hard ceiling, overrides CLI flag)
+  - Network response size capped at 10 MB
+
+- **MEDIUM: IOC Data Integrity Verification** (CWE-354)
+  - SHA256 hash stored alongside cached IOC files
+  - Cache integrity verified before use; re-fetches on mismatch
+
+- **MEDIUM: Secure Network Requests** (CWE-295)
+  - Enforced HTTPS-only for all external URLs
+  - URL validation before any network request
+  - Disabled automatic redirect following
+  - Added `User-Agent` header for request identification
+
+- **LOW: Log Output Sanitization**
+  - Added `sanitizeForLog()` to strip control characters from console output
+  - Prevents log injection and terminal escape sequence attacks
+
+- **LOW: Sensitive Data Redaction**
+  - Removed `gitName`, `gitEmail`, `npmUser` from API upload payload
+  - Only non-PII metadata sent to security API
+
+### Added
+
+- **Help System**: New `--help` / `-h` flag with comprehensive usage documentation
+- **Scan Statistics**: Detailed metrics displayed after scan completion
+  - Directories scanned, packages checked, lockfiles analyzed
+  - Scan duration in seconds
+  - Symlinks skipped count
+  - Errors encountered count
+- **Extended CSV Report Fields**:
+  - `Report_Type`: COMPLETE or PARTIAL (for interrupted scans)
+  - `Node_Version`: Node.js runtime version
+  - `Scanner_Version`: Scanner version string
+  - `Scan_Duration_MS`: Total scan time in milliseconds
+  - `Directories_Scanned`: Count of directories traversed
+  - `Packages_Scanned`: Count of packages analyzed
+- **Graceful Shutdown Handling**: 
+  - SIGINT/SIGTERM handlers generate partial reports before exit
+  - Exit code 130 for interrupted scans
+- **Case-Insensitive Malware Detection**:
+  - Detects case variants of malware files (e.g., `Setup_Bun.js`, `SETUP_BUN.JS`)
+  - Pre-computed lowercase set for O(1) lookups
+- **npm-shrinkwrap.json Support**: Added to lockfile detection list
+- **TTY Color Detection**: Colors automatically disabled in non-TTY environments (CI/CD safety)
+
+### Changed
+
+- **Strict Mode**: Added `'use strict'` directive for better error detection
+- **Frozen Configuration**: `Object.freeze()` on all config objects prevents accidental mutation
+- **Timeout Enforcement**: All `execSync` calls now have explicit timeouts (5-10 seconds)
+- **Safe File Reading**: New `safeReadFile()` wrapper with size limits and error handling
+- **JSON Schema Validation**: Basic structure validation for parsed IOC data
+- **Improved Error Messages**: Errors no longer expose full file paths; uses `sanitizeForLog()`
+
+### Fixed
+
+- **Unbounded Recursion**: Hard depth limit prevents stack overflow on deeply nested directories
+- **Memory Exhaustion**: File size checks prevent OOM on large files
+- **Infinite Loops**: Scan limits prevent runaway scans on massive node_modules trees
+
+### Deprecated
+
+- Direct configuration of `API_KEY` and `UPLOAD_API_URL` constants (use environment variables)
+
+---
+
 ## [1.3.2] - 2025-12-01
 
 ### Fixed
