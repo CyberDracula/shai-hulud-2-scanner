@@ -370,7 +370,6 @@ Contributions are welcome! Please submit issues or pull requests on the GitHub r
 
 Special thanks to everyone who has contributed to the Shai-Hulud 2.0 Scanner project:
 
-- @CyberDracula
 - MaSMas0 (https://github.com/MaSMas0) — Security hardening in 2.0
 - Hemachandsai (malicious package IOC feed)
 - Wiz Research (threat intelligence)
