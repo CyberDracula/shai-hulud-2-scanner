@@ -5,6 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/CyberDracula/shai-hulud-2-scanner?style=social)](https://github.com/CyberDracula/shai-hulud-2-scanner)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)](package.json)
+[![Security Hardened](https://img.shields.io/badge/security-hardened-green.svg)](CHANGELOG.md#200---2025-12-01)
+[![No Vulnerabilities](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
+[![Auditable](https://img.shields.io/badge/code-auditable-blue.svg)](scan.js)
 [![Last Commit](https://img.shields.io/github/last-commit/CyberDracula/shai-hulud-2-scanner)](https://github.com/CyberDracula/shai-hulud-2-scanner/commits/main)
 
 A forensic auditing tool designed to detect the Shai-Hulud 1.0/2.0 (and related) npm supply chain attacks. It scans local caches, global installations, and project directories against the IOCs (Indicators of Compromise) provided by Wiz Research.
