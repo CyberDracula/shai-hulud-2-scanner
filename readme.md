@@ -1,5 +1,12 @@
 # Shai-Hulud 1.0/2.0 Malware Scanner
 
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/CyberDracula/shai-hulud-2-scanner/releases)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D12.0.0-brightgreen.svg)](https://nodejs.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/CyberDracula/shai-hulud-2-scanner?style=social)](https://github.com/CyberDracula/shai-hulud-2-scanner)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)](package.json)
+[![Last Commit](https://img.shields.io/github/last-commit/CyberDracula/shai-hulud-2-scanner)](https://github.com/CyberDracula/shai-hulud-2-scanner/commits/main)
+
 A forensic auditing tool designed to detect the Shai-Hulud 1.0/2.0 (and related) npm supply chain attacks. It scans local caches, global installations, and project directories against the IOCs (Indicators of Compromise) provided by Wiz Research.
 
 ## 🛡️ Security Hardening (v2.0.0)
