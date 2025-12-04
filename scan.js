@@ -30,6 +30,16 @@ const os = require('os');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 
+// Load scanner version from package.json
+let SCANNER_VERSION = '2.1.0'; // fallback
+try {
+    const pkgJsonPath = path.join(__dirname, 'package.json');
+    const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    SCANNER_VERSION = pkgJson.version || SCANNER_VERSION;
+} catch (e) {
+    // Use fallback if package.json not found
+}
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -58,6 +68,7 @@ const CONFIG = Object.freeze({
 
     // CI/CD Defaults
     DEFAULT_FAIL_ON: 'critical',
+    DEFAULT_SAFE_MATCH_LEVEL: 2, // 0=none, 1=root pkg only, 2=all
 
     // Scan Stats Limits (prevent infinite loops)
     MAX_DIRECTORIES_SCANNED: 100000,
@@ -249,6 +260,10 @@ const scanStats = {
 
 let isShuttingDown = false;
 
+// Current scan context - tracks where findings are being detected
+// Helps identify if issue found in parent package.json, lockfile, cache, etc.
+let SCAN_CONTEXT = 'UNKNOWN';
+
 // ============================================================================
 // SECURITY UTILITIES
 // ============================================================================
@@ -429,6 +444,7 @@ function setupSignalHandlers() {
 
 function getUserInfo() {
     console.log(`${colors.cyan}[1/5] Identifying User Environment...${colors.reset}`);
+    
     const info = {
         gitName: 'Unknown',
         gitEmail: 'Unknown',
@@ -436,7 +452,7 @@ function getUserInfo() {
         hostname: os.hostname(),
         platform: os.platform(),
         nodeVersion: process.version,
-        scannerVersion: '2.1.0-hardened'
+        scannerVersion: SCANNER_VERSION
     };
 
     try {
@@ -462,6 +478,7 @@ function getUserInfo() {
     console.log(`    > NPM User: ${info.npmUser}`);
     console.log(`    > Host: ${info.hostname} (${info.platform})`);
     console.log(`    > Node: ${info.nodeVersion}`);
+    console.log(`    > Scanner Version: ${info.scannerVersion}`);
 
     return info;
 }
@@ -670,7 +687,7 @@ function fetchWithCache(url, cacheFile, fallbackFile, sourceName, forceNoCache =
         const req = https.get(url, {
             timeout: CONFIG.NETWORK_TIMEOUT_MS,
             headers: {
-                'User-Agent': 'Shai-Hulud-Scanner/2.1.0'
+                'User-Agent': 'Shai-Hulud-Scanner/' + SCANNER_VERSION
             }
         }, (res) => {
             clearTimeout(timeout);
@@ -916,7 +933,7 @@ function getSearchPaths() {
 // SCANNING LOGIC (Hardened)
 // ============================================================================
 
-function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_SCAN_DEPTH) {
+function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_SCAN_DEPTH, safeMatchLevel = 2) {
     // Check shutdown flag
     if (isShuttingDown) return;
 
@@ -949,7 +966,11 @@ function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_
     scanStats.directoriesScanned++;
 
     if (path.basename(currentPath) === 'node_modules') {
-        scanNodeModules(currentPath, badPackages);
+        // Set context before scanning node_modules
+        const prevContext = SCAN_CONTEXT;
+        SCAN_CONTEXT = 'NODE_MODULES';
+        scanNodeModules(currentPath, badPackages, safeMatchLevel);
+        SCAN_CONTEXT = prevContext;
         return;
     }
 
@@ -961,7 +982,7 @@ function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_
         return;
     }
 
-    checkPackageJson(currentPath, path.basename(currentPath), badPackages);
+    checkPackageJson(currentPath, path.basename(currentPath), badPackages, safeMatchLevel);
 
     for (const entry of entries) {
         if (isShuttingDown) break;
@@ -969,18 +990,21 @@ function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_
         const fullPath = path.join(currentPath, entry.name);
 
         if (entry.isFile() && (entry.name === 'package-lock.json' || entry.name === 'yarn.lock' || entry.name === 'npm-shrinkwrap.json')) {
-            checkLockfile(fullPath, badPackages);
+            const prevContext = SCAN_CONTEXT;
+            SCAN_CONTEXT = SCAN_CONTEXT === 'NODE_MODULES' ? 'DEPENDENCY_LOCK_FILE' : 'PARENT_LOCK_FILE';
+            checkLockfile(fullPath, badPackages, safeMatchLevel);
+            SCAN_CONTEXT = prevContext;
         }
         else if (entry.isDirectory() && entry.name === 'node_modules') {
-            scanNodeModules(fullPath, badPackages);
+            scanNodeModules(fullPath, badPackages, safeMatchLevel);
         }
         else if (entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.startsWith('_')) {
-            scanDir(fullPath, badPackages, depth + 1, maxDepth);
+            scanDir(fullPath, badPackages, depth + 1, maxDepth, safeMatchLevel);
         }
     }
 }
 
-function scanNodeModules(modulesPath, badPackages) {
+function scanNodeModules(modulesPath, badPackages, safeMatchLevel = 2) {
     if (isShuttingDown) return;
 
     try {
@@ -1003,8 +1027,8 @@ function scanNodeModules(modulesPath, badPackages) {
                     const scopedPackages = fs.readdirSync(scopedPath);
                     for (const sp of scopedPackages) {
                         const pkgPath = path.join(scopedPath, sp);
-                        checkPackageJson(pkgPath, `${pkg}/${sp}`, badPackages);
-                        checkPackageLockfiles(pkgPath, badPackages);
+                        checkPackageJson(pkgPath, `${pkg}/${sp}`, badPackages, safeMatchLevel);
+                        checkPackageLockfiles(pkgPath, badPackages, safeMatchLevel);
                         scanStats.packagesScanned++;
                     }
                 } catch (e) {
@@ -1012,8 +1036,8 @@ function scanNodeModules(modulesPath, badPackages) {
                 }
             } else {
                 const pkgPath = path.join(modulesPath, pkg);
-                checkPackageJson(pkgPath, pkg, badPackages);
-                checkPackageLockfiles(pkgPath, badPackages);
+                checkPackageJson(pkgPath, pkg, badPackages, safeMatchLevel);
+                checkPackageLockfiles(pkgPath, badPackages, safeMatchLevel);
                 scanStats.packagesScanned++;
             }
         }
@@ -1022,7 +1046,7 @@ function scanNodeModules(modulesPath, badPackages) {
     }
 }
 
-function checkPackageLockfiles(pkgPath, badPackages) {
+function checkPackageLockfiles(pkgPath, badPackages, safeMatchLevel = 2) {
     const lockFiles = ['package-lock.json', 'yarn.lock', 'npm-shrinkwrap.json'];
     for (const lockFile of lockFiles) {
         const lockPath = path.join(pkgPath, lockFile);
@@ -1030,7 +1054,7 @@ function checkPackageLockfiles(pkgPath, badPackages) {
             // Use lstatSync to check existence and file type in one call
             const stats = fs.lstatSync(lockPath);
             if (stats.isFile()) {
-                checkLockfile(lockPath, badPackages);
+                checkLockfile(lockPath, badPackages, safeMatchLevel);
             }
         } catch (e) {
             // File doesn't exist or can't be accessed - skip silently
@@ -1042,7 +1066,7 @@ function checkPackageLockfiles(pkgPath, badPackages) {
 // CORE PACKAGE CHECKING (Forensic + Metadata + Ghost)
 // ============================================================================
 
-function checkPackageJson(pkgPath, pkgName, badPackages) {
+function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
     if (isShuttingDown) return;
 
     scanStats.filesChecked++;
@@ -1096,18 +1120,23 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: validatedPkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: `${sanitizeForLog(forensicPath, 100)} (${sanitizeForLog(verification.reason, 150)})`
             });
             
         } else {
             // False positive - record as safe match (silent, like version safe matches)
-            detectedIssues.push({
-                type: 'SAFE_MATCH',
-                package: pkgName,
-                version: 'UNKNOWN',
-                location: validatedPkgPath,
-                details: `Benign ${sanitizeForLog(forensicPath, 50)}: ${sanitizeForLog(verification.reason, 100)}`
-            });
+            // Only report if safeMatchLevel >= 2 (all)
+            if (safeMatchLevel >= 2) {
+                detectedIssues.push({
+                    type: 'SAFE_MATCH',
+                    package: pkgName,
+                    version: 'UNKNOWN',
+                    location: validatedPkgPath,
+                    detection_context: SCAN_CONTEXT,
+                    details: `Benign ${sanitizeForLog(forensicPath, 50)}: ${sanitizeForLog(verification.reason, 100)}`
+                });
+            }
         }
     }
 
@@ -1128,6 +1157,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                         package: pkgName,
                         version: 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: 'Targeted package folder exists but package.json is missing'
                     });
                 } else {
@@ -1136,6 +1166,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                         package: pkgName,
                         version: 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `package.json ${error}`
                     });
                 }
@@ -1148,10 +1179,22 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         // A. HEURISTIC SCRIPT CHECK (Run on everything)
         checkScripts(packageJson, pkgName, pkgPath);
 
-        // B. TARGET CHECK
+        // B. CHECK DEPENDENCIES (if this is a root package.json, not in node_modules)
+        const isRootPackage = !pkgPath.includes('node_modules');
+        if (isRootPackage && packageJson.dependencies) {
+            checkDependencies(packageJson.dependencies, 'dependencies', pkgPath, badPackages, safeMatchLevel);
+        }
+        if (isRootPackage && packageJson.devDependencies) {
+            checkDependencies(packageJson.devDependencies, 'devDependencies', pkgPath, badPackages, safeMatchLevel);
+        }
+        if (isRootPackage && packageJson.optionalDependencies) {
+            checkDependencies(packageJson.optionalDependencies, 'optionalDependencies', pkgPath, badPackages, safeMatchLevel);
+        }
+
+        // C. TARGET CHECK
         if (!badPackages[pkgName]) return;
 
-        // C. VERSION CHECK
+        // D. VERSION CHECK
         const version = packageJson.version;
         if (!version || typeof version !== 'string') {
             detectedIssues.push({
@@ -1159,6 +1202,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: pkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: 'Missing or invalid version field'
             });
             return;
@@ -1174,15 +1218,21 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                 type: matchType,
                 package: pkgName,
                 version: version,
-                location: pkgPath
+                location: pkgPath,
+                detection_context: SCAN_CONTEXT
             });
         } else {
-            detectedIssues.push({
-                type: 'SAFE_MATCH',
-                package: pkgName,
-                version: version,
-                location: pkgPath
-            });
+            // Only report safe version for installed packages if safeMatchLevel >= 2 (all)
+            // safeMatchLevel 0 = no safe matches, 1 = only root package safe matches, 2 = all safe matches
+            if (safeMatchLevel >= 2) {
+                detectedIssues.push({
+                    type: 'SAFE_MATCH',
+                    package: pkgName,
+                    version: version,
+                    location: pkgPath,
+                    detection_context: SCAN_CONTEXT
+                });
+            }
         }
     } catch (e) {
         if (badPackages[pkgName]) {
@@ -1191,6 +1241,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: pkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: `package.json parse error: ${e.message}`
             });
         }
@@ -1199,7 +1250,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
 
 // ============================================================================
-// FORNSIC FILE VERIFICATION (Deep Content Scan)
+// FORENSIC FILE VERIFICATION (Deep Content Scan)
 // ============================================================================
 
 function verifySuspiciousFile(filePath, fileName) {
@@ -1338,6 +1389,214 @@ function verifySuspiciousFile(filePath, fileName) {
 }
 
 // ============================================================================
+// DEPENDENCY CHECKER
+// ============================================================================
+
+/**
+ * Simple semver range checker - checks if any bad version satisfies the range
+ * Also warns if the range is open-ended (could allow patches/fixes)
+ * Handles basic semver patterns: ^, ~, >=, >, <=, <, =
+ * @param {string} versionSpec - Semver range specifier (e.g., ^1.2.3, ~1.0.0, >=1.2.0)
+ * @param {Set} badVersions - Set of known bad version strings
+ * @returns {object} - { hasBadVersion: boolean, isOpenRange: boolean, matchingBadVersions: string[] }
+ *                    isOpenRange=true means patches could exist (^ or ~), lower confidence warning
+ *                    isOpenRange=false means exact/bounded range (=, <, >), high confidence alert
+ */
+function checkSemverRange(versionSpec, badVersions) {
+    if (!versionSpec || typeof versionSpec !== 'string') return { hasBadVersion: false, isOpenRange: false, matchingBadVersions: [] };
+    
+    // Parse the version spec
+    const specTrimmed = versionSpec.trim();
+    
+    // Extract operator and base version
+    let operator = '=';
+    let baseVersion = specTrimmed;
+    
+    if (specTrimmed.startsWith('^')) {
+        operator = '^';
+        baseVersion = specTrimmed.slice(1);
+    } else if (specTrimmed.startsWith('~')) {
+        operator = '~';
+        baseVersion = specTrimmed.slice(1);
+    } else if (specTrimmed.startsWith('>=')) {
+        operator = '>=';
+        baseVersion = specTrimmed.slice(2);
+    } else if (specTrimmed.startsWith('>')) {
+        operator = '>';
+        baseVersion = specTrimmed.slice(1);
+    } else if (specTrimmed.startsWith('<=')) {
+        operator = '<=';
+        baseVersion = specTrimmed.slice(2);
+    } else if (specTrimmed.startsWith('<')) {
+        operator = '<';
+        baseVersion = specTrimmed.slice(1);
+    } else if (specTrimmed.startsWith('=')) {
+        operator = '=';
+        baseVersion = specTrimmed.slice(1);
+    }
+    
+    baseVersion = baseVersion.trim();
+    
+    // Parse version into [major, minor, patch]
+    const parseVersion = (v) => {
+        const match = String(v).match(/(\d+)\.(\d+)\.(\d+)/);
+        if (!match) return null;
+        return { major: parseInt(match[1]), minor: parseInt(match[2]), patch: parseInt(match[3]), str: v };
+    };
+    
+    const compareVersions = (v1, v2) => {
+        if (v1.major !== v2.major) return v1.major - v2.major;
+        if (v1.minor !== v2.minor) return v1.minor - v2.minor;
+        return v1.patch - v2.patch;
+    };
+    
+    const baseParsed = parseVersion(baseVersion);
+    if (!baseParsed) return { hasBadVersion: false, isOpenRange: false, matchingBadVersions: [] };
+    
+    // Determine if this is an open-ended range (allows future patches/fixes)
+    const isOpenRange = operator === '^' || operator === '~' || operator === '>=' || operator === '>';
+    
+    // Helper to check if version satisfies range
+    const satisfiesRange = (badParsed) => {
+        switch (operator) {
+            case '=':
+                return badParsed.major === baseParsed.major && 
+                       badParsed.minor === baseParsed.minor && 
+                       badParsed.patch === baseParsed.patch;
+                
+            case '^':
+                if (baseParsed.major !== 0) {
+                    return badParsed.major === baseParsed.major && compareVersions(badParsed, baseParsed) >= 0;
+                } else if (baseParsed.minor !== 0) {
+                    return badParsed.major === 0 && badParsed.minor === baseParsed.minor && compareVersions(badParsed, baseParsed) >= 0;
+                } else {
+                    return badParsed.major === 0 && badParsed.minor === 0 && badParsed.patch === baseParsed.patch;
+                }
+                
+            case '~':
+                return badParsed.major === baseParsed.major && 
+                       badParsed.minor === baseParsed.minor && 
+                       compareVersions(badParsed, baseParsed) >= 0;
+                
+            case '>=':
+                return compareVersions(badParsed, baseParsed) >= 0;
+                
+            case '>':
+                return compareVersions(badParsed, baseParsed) > 0;
+                
+            case '<=':
+                return compareVersions(badParsed, baseParsed) <= 0;
+                
+            case '<':
+                return compareVersions(badParsed, baseParsed) < 0;
+                
+            default:
+                return false;
+        }
+    };
+    
+    // Collect all matching bad versions
+    const matchingBadVersions = [];
+    for (const badVer of badVersions) {
+        if (badVer === '*') continue; // Skip wildcard, handled separately
+        const badParsed = parseVersion(badVer);
+        if (!badParsed) continue; // Can't parse this bad version
+        if (satisfiesRange(badParsed)) {
+            matchingBadVersions.push(badVer);
+        }
+    }
+    
+    return {
+        hasBadVersion: matchingBadVersions.length > 0,
+        isOpenRange: isOpenRange,
+        matchingBadVersions: matchingBadVersions
+    };
+}
+
+function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel = 2) {
+    if (!deps || typeof deps !== 'object') return;
+    
+    for (const [pkgName, versionSpec] of Object.entries(deps)) {
+        if (!badPackages[pkgName]) continue;
+        
+        const targetVersions = badPackages[pkgName];
+        const hasWildcard = targetVersions.has('*');
+        
+        // Check for wildcard match first (all versions bad)
+        if (hasWildcard) {
+            console.log(`${colors.red}    [!] DEPENDENCY ALERT: ${sanitizeForLog(pkgName)}@${sanitizeForLog(versionSpec)} in ${depType} (WILDCARD)${colors.reset}`);
+            detectedIssues.push({
+                type: 'WILDCARD_DEPENDENCY_HIT',
+                package: pkgName,
+                version: versionSpec,
+                location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
+                details: `Wildcard match in ${depType}`
+            });
+            continue;
+        }
+        
+        // Check for exact version match
+        // Extract a semver-like token (core x.y.z plus optional prerelease/build metadata)
+        // Examples matched: 1.2.3, 1.2.3-alpha.1, 1.2.3+build.1
+        const versionMatch = String(versionSpec).match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?)/);
+        const fullVersion = versionMatch ? versionMatch[1] : versionSpec;
+        // coreVersion removes any prerelease/build metadata so comparisons against plain x.y.z work
+        // Only derive coreVersion from fullVersion when we actually matched a semver token.
+        const coreVersion = versionMatch ? String(fullVersion).split(/[+-]/)[0] : versionSpec;
+
+        if (targetVersions.has(coreVersion) || targetVersions.has(fullVersion) || targetVersions.has(versionSpec)) {
+            console.log(`${colors.red}    [!] DEPENDENCY ALERT: ${sanitizeForLog(pkgName)}@${sanitizeForLog(versionSpec)} in ${depType} (EXACT MATCH)${colors.reset}`);
+            detectedIssues.push({
+                type: 'DEPENDENCY_HIT',
+                package: pkgName,
+                version: versionSpec,
+                location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
+                details: `Exact version match in ${depType}`
+            });
+            continue;
+        }
+        
+        // Check if any bad version satisfies the semver range
+        const rangeCheck = checkSemverRange(versionSpec, targetVersions);
+        if (rangeCheck.hasBadVersion) {
+            const confidence = rangeCheck.isOpenRange ? 'RANGE MATCH (⚠️ patch may exist)' : 'RANGE MATCH (⚠️ HIGH CONFIDENCE)';
+            const matchStr = rangeCheck.matchingBadVersions.join(', ');
+            console.log(`${colors.red}    [!] DEPENDENCY ALERT: ${sanitizeForLog(pkgName)}@${sanitizeForLog(versionSpec)} in ${depType} (${confidence}: ${matchStr})${colors.reset}`);
+            
+            // Include confidence level in details
+            const confidenceNote = rangeCheck.isOpenRange 
+                ? ' (Note: Open-ended range ^ or ~ allows future patches - verify if fix exists)' 
+                : '';
+            
+            detectedIssues.push({
+                type: 'DEPENDENCY_HIT',
+                package: pkgName,
+                version: versionSpec,
+                location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
+                details: `Semver range matches malicious versions [${matchStr}] in ${depType}${confidenceNote}`
+            });
+            continue;
+        }
+        
+        // Safe match - package is in denylist but no versions match
+        // Only report if safeMatchLevel >= 1 (root package only or all)
+        if (safeMatchLevel >= 1) {
+            detectedIssues.push({
+                type: 'SAFE_MATCH',
+                package: pkgName,
+                version: versionSpec,
+                location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
+                details: `Safe version in ${depType}`
+            });
+        }
+    }
+}
+
+// ============================================================================
 // HEURISTIC SCRIPT SCANNER
 // ============================================================================
 
@@ -1381,6 +1640,7 @@ function checkScripts(content, pkgName, pkgPath) {
                         package: pkgName,
                         version: content.version || 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `${rule.indicator}: ${rule.desc}`
                     });
                     return; // Stop checking this script
@@ -1399,6 +1659,7 @@ function checkScripts(content, pkgName, pkgPath) {
                         package: pkgName,
                         version: content.version || 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `${rule.indicator}: ${rule.desc}`
                     });
                 }
@@ -1413,50 +1674,91 @@ function checkScripts(content, pkgName, pkgPath) {
 // LOCKFILE CHECKING
 // ============================================================================
 
-function checkDependenciesRecursive(deps, badPackages, lockPath, depth = 0) {
+function checkDependenciesRecursive(deps, badPackages, lockPath, safeMatchLevel = 2, depth = 0, seenInLockfile = null) {
     if (depth > 100) return; // Prevent infinite recursion
 
     for (const [pkg, details] of Object.entries(deps)) {
         if (badPackages[pkg] && details && details.version) {
-            checkVersionMatch(pkg, details.version, badPackages[pkg], lockPath, 'NPM_LOCK_V1');
+            // Check for duplicates if tracking set is provided
+            if (seenInLockfile) {
+                const pkgVerKey = `${pkg}@${details.version}`;
+                if (seenInLockfile.has(pkgVerKey)) {
+                    continue; // Skip duplicate
+                }
+                seenInLockfile.add(pkgVerKey);
+            }
+            checkVersionMatch(pkg, details.version, badPackages[pkg], lockPath, 'NPM_LOCK_V1', safeMatchLevel);
         }
         if (details && details.dependencies && typeof details.dependencies === 'object') {
-            checkDependenciesRecursive(details.dependencies, badPackages, lockPath, depth + 1);
+            checkDependenciesRecursive(details.dependencies, badPackages, lockPath, safeMatchLevel, depth + 1, seenInLockfile);
         }
     }
 }
 
-function checkVersionMatch(pkg, ver, badVersions, lockPath, type) {
+function checkVersionMatch(pkg, ver, badVersions, lockPath, type, safeMatchLevel = 2) {
     if (!ver || typeof ver !== 'string') return;
 
     const cleanVer = ver.slice(0, 50); // Limit version string length
 
+    // Check for wildcard match first
+    if (badVersions.has('*')) {
+        detectedIssues.push({
+            type: 'WILDCARD_LOCK_HIT',
+            package: pkg,
+            version: cleanVer,
+            location: lockPath,
+            detection_context: SCAN_CONTEXT,
+            details: `Wildcard match in ${type}`
+        });
+        return;
+    }
+
+    // Check for exact version match
+    // Lockfiles always contain exact versions (no ranges), so we only need exact matching
     if (badVersions.has(cleanVer)) {
         detectedIssues.push({
             type: 'LOCKFILE_HIT',
             package: pkg,
             version: cleanVer,
             location: lockPath,
+            detection_context: SCAN_CONTEXT,
             details: `Exact match in ${type}`
         });
-    }
-    else if (badVersions.has('*')) {
-        detectedIssues.push({
-            type: 'WILDCARD_LOCK_HIT',
-            package: pkg,
-            version: cleanVer,
-            location: lockPath,
-            details: `Wildcard match in ${type}`
-        });
+    } else {
+        // Safe version - package is in denylist but version is not malicious
+        // Only report if safeMatchLevel >= 2 (all)
+        if (safeMatchLevel >= 2) {
+            detectedIssues.push({
+                type: 'SAFE_MATCH',
+                package: pkg,
+                version: cleanVer,
+                location: lockPath,
+                details: `Safe version in ${type}`,
+                detection_context: SCAN_CONTEXT
+            });
+        }
     }
 }
 
-function checkLockfile(lockPath, badPackages) {
+function checkLockfile(lockPath, badPackages, safeMatchLevel = 2) {
     if (isShuttingDown) return;
 
     scanStats.lockfilesChecked++;
 
     const fileName = path.basename(lockPath);
+    
+    // Save current context and set appropriate lockfile context
+    const savedContext = SCAN_CONTEXT;
+    
+    // Determine appropriate lockfile context based on current state
+    if (!SCAN_CONTEXT.includes('LOCK_FILE')) {
+        // If we're in NODE_MODULES or scanning a project directory with lockfile present
+        if (SCAN_CONTEXT === 'NODE_MODULES' || lockPath.includes('node_modules')) {
+            SCAN_CONTEXT = 'DEPENDENCY_LOCK_FILE';
+        } else {
+            SCAN_CONTEXT = 'PARENT_LOCK_FILE';
+        }
+    }
 
     const { content, error, size } = safeReadFile(lockPath, CONFIG.MAX_LOCKFILE_SIZE_BYTES);
     if (error) {
@@ -1465,6 +1767,9 @@ function checkLockfile(lockPath, badPackages) {
         }
         return;
     }
+
+    // Track seen package@version to avoid duplicates within same lockfile
+    const seenInLockfile = new Set();
 
     // --- 1. NPM Lockfile ---
     if (fileName === 'package-lock.json' || fileName === 'npm-shrinkwrap.json') {
@@ -1477,14 +1782,18 @@ function checkLockfile(lockPath, badPackages) {
                     const pkgName = key.replace(/^.*node_modules\//, '');
 
                     if (pkgName && badPackages[pkgName] && details && details.version) {
-                        checkVersionMatch(pkgName, details.version, badPackages[pkgName], lockPath, 'NPM_LOCK_V3');
+                        const pkgVerKey = `${pkgName}@${details.version}`;
+                        if (!seenInLockfile.has(pkgVerKey)) {
+                            seenInLockfile.add(pkgVerKey);
+                            checkVersionMatch(pkgName, details.version, badPackages[pkgName], lockPath, 'NPM_LOCK_V3', safeMatchLevel);
+                        }
                     }
                 }
             }
 
             // Check v1 "dependencies" section
             if (json.dependencies && typeof json.dependencies === 'object') {
-                checkDependenciesRecursive(json.dependencies, badPackages, lockPath);
+                checkDependenciesRecursive(json.dependencies, badPackages, lockPath, safeMatchLevel, 0, seenInLockfile);
             }
 
         } catch (e) {
@@ -1517,25 +1826,12 @@ function checkLockfile(lockPath, badPackages) {
                 if (versionMatch) {
                     currentVersion = versionMatch[1];
                     
-                    // Check if this package/version is in our denylist
+                    // Use unified version checking function (handles wildcard, exact, and semver range)
                     if (badPackages[currentPkg]) {
-                        const badVersions = badPackages[currentPkg];
-                        if (badVersions.has('*')) {
-                            detectedIssues.push({
-                                type: 'WILDCARD_LOCK_HIT',
-                                package: currentPkg,
-                                version: currentVersion,
-                                location: lockPath,
-                                details: 'Yarn Lock match (Wildcard)'
-                            });
-                        } else if (badVersions.has(currentVersion)) {
-                            detectedIssues.push({
-                                type: 'LOCKFILE_HIT',
-                                package: currentPkg,
-                                version: currentVersion,
-                                location: lockPath,
-                                details: 'Yarn Lock match (Strict)'
-                            });
+                        const pkgVerKey = `${currentPkg}@${currentVersion}`;
+                        if (!seenInLockfile.has(pkgVerKey)) {
+                            seenInLockfile.add(pkgVerKey);
+                            checkVersionMatch(currentPkg, currentVersion, badPackages[currentPkg], lockPath, 'YARN_LOCK', safeMatchLevel);
                         }
                     }
                     currentPkg = null; // Reset after processing
@@ -1543,6 +1839,9 @@ function checkLockfile(lockPath, badPackages) {
             }
         }
     }
+    
+    // Restore original context
+    SCAN_CONTEXT = savedContext;
 }
 
 // ============================================================================
@@ -1566,10 +1865,8 @@ function generateReport(userInfo, isPartial = false) {
         'Package',
         'Version',
         'Location',
-        'Details',
-        'Scan_Duration_MS',
-        'Directories_Scanned',
-        'Packages_Scanned'
+        'Detection_Context',
+        'Details'
     ];
 
     let csvContent = headers.join(',') + '\n';
@@ -1587,15 +1884,13 @@ function generateReport(userInfo, isPartial = false) {
             escapeCSV(userInfo.npmUser),
             escapeCSV(userInfo.platform),
             escapeCSV(userInfo.nodeVersion || process.version),
-            escapeCSV(userInfo.scannerVersion || '2.1.0-hardened'),
+            escapeCSV(userInfo.scannerVersion || SCANNER_VERSION),
             escapeCSV(issue.type),
             escapeCSV(issue.package),
             escapeCSV(issue.version),
             escapeCSV(issue.location),
-            escapeCSV(issue.details || ''),
-            escapeCSV(String(duration)),
-            escapeCSV(String(scanStats.directoriesScanned)),
-            escapeCSV(String(scanStats.packagesScanned))
+            escapeCSV(issue.detection_context || 'UNKNOWN'),
+            escapeCSV(issue.details || '')
         ];
         csvContent += row.join(',') + '\n';
     });
@@ -1640,6 +1935,8 @@ async function uploadReport(csvContent, userInfo) {
         return;
     }
 
+    const duration = scanStats.startTime ? Date.now() - scanStats.startTime : 0;
+    
     const payload = JSON.stringify({
         userInfo: {
             hostname: userInfo.hostname,
@@ -1651,8 +1948,17 @@ async function uploadReport(csvContent, userInfo) {
         reportHash: computeHash(csvContent),
         issueCount: detectedIssues.length,
         criticalCount: detectedIssues.filter(i =>
-            ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT'].includes(i.type)
+            ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT', 'WILDCARD_DEPENDENCY_HIT', 'DEPENDENCY_HIT'].includes(i.type)
         ).length,
+        scanStats: {
+            duration: duration,
+            directoriesScanned: scanStats.directoriesScanned,
+            packagesScanned: scanStats.packagesScanned,
+            filesChecked: scanStats.filesChecked,
+            lockfilesChecked: scanStats.lockfilesChecked,
+            symlinksSkipped: scanStats.symlinksSkipped,
+            errorsEncountered: scanStats.errorsEncountered
+        },
         report: csvContent
     });
 
@@ -1661,7 +1967,7 @@ async function uploadReport(csvContent, userInfo) {
         headers: {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(payload),
-            'User-Agent': 'Shai-Hulud-Scanner/2.1.0',
+            'User-Agent': 'Shai-Hulud-Scanner/' + SCANNER_VERSION,
             ...(API_KEY && { 'x-api-key': API_KEY })
         },
         timeout: 30000
@@ -1719,6 +2025,10 @@ ${colors.cyan}OPTIONS:${colors.reset}
     --no-cache        Bypass IOC cache and fetch fresh data
     --no-upload       Skip uploading report to security API
     --depth=<n>       Set maximum directory traversal depth (default: ${CONFIG.DEFAULT_SCAN_DEPTH}, max: ${CONFIG.MAX_SCAN_DEPTH})
+    --safe-match=<n>  Control SAFE_MATCH reporting level (default: 2):
+                        0 - No safe matches reported (only threats)
+                        1 - Only root package.json safe matches reported
+                        2 - All safe matches reported (installed + root)
     --fail-on=<level> Set CI/CD exit code threshold:
                         critical - Exit 1 on critical findings only (default)
                         warning  - Exit 1 on critical or warning findings
@@ -1814,6 +2124,22 @@ ${colors.cyan}EXIT CODES:${colors.reset}
         if (['critical', 'warning', 'off'].includes(val)) failOn = val;
     }
 
+    // Parse safe-match reporting level
+    let safeMatchLevel = CONFIG.DEFAULT_SAFE_MATCH_LEVEL; // default from config
+    const safeMatchEqArg = args.find(a => a.startsWith('--safe-match='));
+    const safeMatchIdx = args.findIndex(a => a === '--safe-match');
+    if (safeMatchEqArg) {
+        const val = Number(safeMatchEqArg.split('=')[1]);
+        if (!Number.isNaN(val) && val >= 0 && val <= 2) {
+            safeMatchLevel = val;
+        }
+    } else if (safeMatchIdx !== -1 && args[safeMatchIdx + 1]) {
+        const val = Number(args[safeMatchIdx + 1]);
+        if (!Number.isNaN(val) && val >= 0 && val <= 2) {
+            safeMatchLevel = val;
+        }
+    }
+
     const isProjectOnlyMode = pathArg && !isFullScan;
 
     const userInfo = getUserInfo();
@@ -1825,11 +2151,13 @@ ${colors.cyan}EXIT CODES:${colors.reset}
 
     console.log(`\n${colors.cyan}[4/5] Starting Deep Scan...${colors.reset}`);
     console.log(`    > Max Depth: ${maxDepth}`);
+    console.log(`    > Safe-Match Level: ${safeMatchLevel} (0=none, 1=root pkg only, 2=all)`);
 
     if (isProjectOnlyMode) {
         console.log(`${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`);
         console.log(`    > Scanning Project Dir: ${scanPath}`);
-        scanDir(scanPath, badPackages, 0, maxDepth);
+        SCAN_CONTEXT = 'PROJECT_DIR';
+        scanDir(scanPath, badPackages, 0, maxDepth, safeMatchLevel);
     } else {
         console.log(`${colors.yellow}    > Mode: Full System Scan${colors.reset}`);
         const systemPaths = getSearchPaths();
@@ -1837,12 +2165,21 @@ ${colors.cyan}EXIT CODES:${colors.reset}
         systemPaths.forEach(p => {
             if (isShuttingDown) return;
             console.log(`    > Scanning System Path: ${p}`);
-            scanDir(p, badPackages, 0, maxDepth);
+            // Determine cache type from path
+            if (p.includes('npm')) SCAN_CONTEXT = 'NPM_CACHE';
+            else if (p.includes('yarn') || p.includes('Yarn')) SCAN_CONTEXT = 'YARN_CACHE';
+            else if (p.includes('pnpm')) SCAN_CONTEXT = 'PNPM_STORE';
+            else if (p.includes('bun') || p.includes('Bun')) SCAN_CONTEXT = 'BUN_CACHE';
+            else if (p.includes('nvm') || p.includes('NVM')) SCAN_CONTEXT = 'NVM_VERSION';
+            else if (p.includes('node_modules')) SCAN_CONTEXT = 'GLOBAL_MODULES';
+            else SCAN_CONTEXT = 'SYSTEM_CACHE';
+            scanDir(p, badPackages, 0, maxDepth, safeMatchLevel);
         });
 
         if (!isShuttingDown) {
             console.log(`    > Scanning Project Dir: ${scanPath}`);
-            scanDir(scanPath, badPackages, 0, maxDepth);
+            SCAN_CONTEXT = 'PROJECT_DIR';
+            scanDir(scanPath, badPackages, 0, maxDepth, safeMatchLevel);
         }
     }
 
