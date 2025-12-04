@@ -187,9 +187,9 @@ The tool categorizes findings into different severity levels. Understanding what
 | **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below. |
 | **CRITICAL_SCRIPT** | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement. |
 | **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check lockfiles. Clear caches. |
-| **DEPENDENCY_HIT** | 🟠 **HIGH** | Malicious package detected in project dependencies/devDependencies/optionalDependencies (exact version match) | ⚠️ **REMOVE FROM PACKAGE.JSON.** Update dependencies and regenerate lockfile. |
-| **WILDCARD_DEPENDENCY_HIT** | 🔴 **CRITICAL** | Malicious package (all versions) detected in project dependencies | ⚠️ **DELETE IMMEDIATELY.** Remove from package.json, clear lockfile, reinstall. |
-| **LOCKFILE_HIT** | 🟠 **HIGH** | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install` | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate. |
+| **DEPENDENCY_HIT** | 🟠 **HIGH** | Malicious package detected in project dependencies/devDependencies/optionalDependencies. May be exact version match or semver range match. See confidence levels below. | ⚠️ **REMOVE FROM PACKAGE.JSON.** Update dependencies and regenerate lockfile. |
+| **WILDCARD_DEPENDENCY_HIT** | 🔴 **CRITICAL** | Malicious package (all versions - wildcard `*`) detected in project dependencies | ⚠️ **DELETE IMMEDIATELY.** Remove from package.json, clear lockfile, reinstall. |
+| **LOCKFILE_HIT** | 🟠 **HIGH** | Malicious version locked in package-lock.json/yarn.lock/npm-shrinkwrap.json. May be exact match or semver range match. Will auto-install on every `npm install` | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate. |
 | **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete lockfile, remove dependency, regenerate with safe versions. |
 | **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or cleanup artifact. |
 | **SCRIPT_WARNING** | 🟡 **WARNING** | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`) | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket. |
@@ -225,6 +225,126 @@ The scanner emits normalized indicator tags to help triage:
 * `INSECURE_NETWORK`: Plain `http://` network calls in install-time scripts
 * `EXFIL_ATTEMPT`: GitHub API interactions or Actions artifact uploads from lifecycle scripts
 * `BACKDOOR_PRIMITIVE`: Use of `nc` or `socat` for reverse shells or listeners
+
+### Semver Range Matching & Confidence Levels
+
+When scanning `package.json` dependencies, the scanner intelligently detects malicious packages across version ranges using npm semver specifiers. This prevents attackers from hiding malware behind version constraints like `^1.2.3` or `~4.17.0`.
+
+#### Three-Tier Detection
+
+1. **Wildcard Detection** (`*`)
+   - All versions flagged as malicious
+   - Confidence: 🔴 **CRITICAL** — Remove immediately
+
+2. **Exact Version Match** (`1.2.3`, `4.17.1`)
+   - Package version exactly matches known malicious version
+   - Confidence: 🟠 **HIGH CONFIDENCE** — Specific version confirmed malicious
+
+3. **Semver Range Match** (`^1.2.3`, `~4.17.0`, `>=2.6.0`, etc.)
+   - Range includes malicious version(s)
+   - Confidence: ⚠️ **MEDIUM/LOW** — Depends on range type (see below)
+
+#### Understanding Confidence Levels in Ranges
+
+The scanner distinguishes between **bounded** and **open-ended** ranges to avoid false positives:
+
+| Range Type | Operator | Example | Confidence | Why |
+|-----------|----------|---------|------------|-----|
+| **Exact Match** | `=` or none | `1.2.3` | 🟠 HIGH | Specific version guaranteed |
+| **Bounded (Major Locked)** | `^` | `^1.2.3` → `>=1.2.3 <2.0.0` | ⚠️ MEDIUM | Allows patches within major version |
+| **Bounded (Patch Locked)** | `~` | `~1.2.3` → `>=1.2.3 <1.3.0` | ⚠️ MEDIUM | Allows patch updates within minor version |
+| **Open-ended (Upper)** | `>=` or `>` | `>=1.2.3` | ⚠️ LOW | Unbounded upward — allows any future version |
+| **Open-ended (Lower)** | `<=` or `<` | `<2.0.0` | ⚠️ LOW | Unbounded downward — risky for old malware |
+
+#### Why Confidence Matters
+
+**The Problem:** A package is on the denylist as `1.2.3` (malicious). But if you specify `^1.2.3`, npm can install:
+
+- `1.2.4`, `1.2.5`, `1.3.0`, `1.9.9` (all safe patches after the denylist was created)
+- The malicious `1.2.3` is still catchable, but future patches might be safe
+
+**The Solution:** The scanner flags these with a **confidence note** so you can verify:
+
+```text
+⚠️ DEPENDENCY ALERT: lodash@~4.17.21 in dependencies (RANGE MATCH: 4.17.21, 4.17.22)
+Note: Open-ended range ^ or ~ allows future patches - verify if fix exists
+```
+
+This lets you decide: "Is 1.2.3 still the risk, or have patches fixed it?"
+
+#### Examples
+
+##### Example 1: Exact Version (High Confidence)
+
+```json
+{
+  "dependencies": {
+    "express": "4.17.1"
+  }
+}
+```
+
+- Result: 🟠 HIGH CONFIDENCE — 4.17.1 is confirmed malicious
+- Action: Remove or update to safe version
+
+##### Example 2: Caret Range (Medium Confidence)
+
+```json
+{
+  "dependencies": {
+    "react": "^18.0.0"
+  }
+}
+```
+
+- Denylist: `18.0.1`, `18.1.0`, `18.2.5`
+- Result: Matches all three — ⚠️ MEDIUM CONFIDENCE
+- Note: Major version locked, but patches within 18.x are caught
+- Action: Update to safe minor version or pin exact version
+
+##### Example 3: Tilde Range (Medium Confidence)
+
+```json
+{
+  "dependencies": {
+    "lodash": "~4.17.21"
+  }
+}
+```
+
+- Denylist: `4.17.21`, `4.17.22`
+- Result: Matches both — ⚠️ MEDIUM CONFIDENCE
+- Note: Patch updates allowed; future patches might be safe
+- Action: Update to `4.17.20` or earlier safe version
+
+##### Example 4: Open-Ended Range (Low Confidence)
+
+```json
+{
+  "devDependencies": {
+    "node-fetch": ">=2.6.0"
+  }
+}
+```
+
+- Denylist: `2.6.1`, `2.7.0`, `3.0.0`, `3.5.0`
+- Result: Matches all — ⚠️ LOW CONFIDENCE
+- Note: Unbounded upward; any version ≥2.6.0 allowed
+- Action: Pin to known safe version like `2.6.0` or `2.5.x`
+
+##### Example 5: Safe Version (No Alert)
+
+```json
+{
+  "dependencies": {
+    "axios": "^1.4.0"
+  }
+}
+```
+
+- Denylist: `1.2.0`, `1.2.1`
+- Result: ✅ SAFE — No versions in range match denylist
+- Action: No action needed
 
 ### 🚨 Emergency Response Steps (If FORENSIC_MATCH or WILDCARD_MATCH Found)
 
