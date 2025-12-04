@@ -260,6 +260,10 @@ const scanStats = {
 
 let isShuttingDown = false;
 
+// Current scan context - tracks where findings are being detected
+// Helps identify if issue found in parent package.json, lockfile, cache, etc.
+let SCAN_CONTEXT = 'UNKNOWN';
+
 // ============================================================================
 // SECURITY UTILITIES
 // ============================================================================
@@ -962,7 +966,11 @@ function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_
     scanStats.directoriesScanned++;
 
     if (path.basename(currentPath) === 'node_modules') {
+        // Set context before scanning node_modules
+        const prevContext = SCAN_CONTEXT;
+        SCAN_CONTEXT = 'NODE_MODULES';
         scanNodeModules(currentPath, badPackages, safeMatchLevel);
+        SCAN_CONTEXT = prevContext;
         return;
     }
 
@@ -982,7 +990,10 @@ function scanDir(currentPath, badPackages, depth = 0, maxDepth = CONFIG.DEFAULT_
         const fullPath = path.join(currentPath, entry.name);
 
         if (entry.isFile() && (entry.name === 'package-lock.json' || entry.name === 'yarn.lock' || entry.name === 'npm-shrinkwrap.json')) {
+            const prevContext = SCAN_CONTEXT;
+            SCAN_CONTEXT = SCAN_CONTEXT === 'NODE_MODULES' ? 'DEPENDENCY_LOCK_FILE' : 'PARENT_LOCK_FILE';
             checkLockfile(fullPath, badPackages, safeMatchLevel);
+            SCAN_CONTEXT = prevContext;
         }
         else if (entry.isDirectory() && entry.name === 'node_modules') {
             scanNodeModules(fullPath, badPackages, safeMatchLevel);
@@ -1109,6 +1120,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: validatedPkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: `${sanitizeForLog(forensicPath, 100)} (${sanitizeForLog(verification.reason, 150)})`
             });
             
@@ -1121,6 +1133,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                     package: pkgName,
                     version: 'UNKNOWN',
                     location: validatedPkgPath,
+                    detection_context: SCAN_CONTEXT,
                     details: `Benign ${sanitizeForLog(forensicPath, 50)}: ${sanitizeForLog(verification.reason, 100)}`
                 });
             }
@@ -1144,6 +1157,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                         package: pkgName,
                         version: 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: 'Targeted package folder exists but package.json is missing'
                     });
                 } else {
@@ -1152,6 +1166,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                         package: pkgName,
                         version: 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `package.json ${error}`
                     });
                 }
@@ -1187,6 +1202,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: pkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: 'Missing or invalid version field'
             });
             return;
@@ -1202,7 +1218,8 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                 type: matchType,
                 package: pkgName,
                 version: version,
-                location: pkgPath
+                location: pkgPath,
+                detection_context: SCAN_CONTEXT
             });
         } else {
             // Only report safe version for installed packages if safeMatchLevel >= 2 (all)
@@ -1212,7 +1229,8 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                     type: 'SAFE_MATCH',
                     package: pkgName,
                     version: version,
-                    location: pkgPath
+                    location: pkgPath,
+                    detection_context: SCAN_CONTEXT
                 });
             }
         }
@@ -1223,6 +1241,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages, safeMatchLevel = 2) {
                 package: pkgName,
                 version: 'UNKNOWN',
                 location: pkgPath,
+                detection_context: SCAN_CONTEXT,
                 details: `package.json parse error: ${e.message}`
             });
         }
@@ -1511,6 +1530,7 @@ function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel =
                 package: pkgName,
                 version: versionSpec,
                 location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
                 details: `Wildcard match in ${depType}`
             });
             continue;
@@ -1532,6 +1552,7 @@ function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel =
                 package: pkgName,
                 version: versionSpec,
                 location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
                 details: `Exact version match in ${depType}`
             });
             continue;
@@ -1554,6 +1575,7 @@ function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel =
                 package: pkgName,
                 version: versionSpec,
                 location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
                 details: `Semver range matches malicious versions [${matchStr}] in ${depType}${confidenceNote}`
             });
             continue;
@@ -1567,6 +1589,7 @@ function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel =
                 package: pkgName,
                 version: versionSpec,
                 location: pkgPath,
+                detection_context: 'PARENT_PKG_FILE',
                 details: `Safe version in ${depType}`
             });
         }
@@ -1617,6 +1640,7 @@ function checkScripts(content, pkgName, pkgPath) {
                         package: pkgName,
                         version: content.version || 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `${rule.indicator}: ${rule.desc}`
                     });
                     return; // Stop checking this script
@@ -1635,6 +1659,7 @@ function checkScripts(content, pkgName, pkgPath) {
                         package: pkgName,
                         version: content.version || 'UNKNOWN',
                         location: pkgPath,
+                        detection_context: SCAN_CONTEXT,
                         details: `${rule.indicator}: ${rule.desc}`
                     });
                 }
@@ -1682,6 +1707,7 @@ function checkVersionMatch(pkg, ver, badVersions, lockPath, type, safeMatchLevel
             package: pkg,
             version: cleanVer,
             location: lockPath,
+            detection_context: SCAN_CONTEXT,
             details: `Wildcard match in ${type}`
         });
         return;
@@ -1695,6 +1721,7 @@ function checkVersionMatch(pkg, ver, badVersions, lockPath, type, safeMatchLevel
             package: pkg,
             version: cleanVer,
             location: lockPath,
+            detection_context: SCAN_CONTEXT,
             details: `Exact match in ${type}`
         });
     } else {
@@ -1706,7 +1733,8 @@ function checkVersionMatch(pkg, ver, badVersions, lockPath, type, safeMatchLevel
                 package: pkg,
                 version: cleanVer,
                 location: lockPath,
-                details: `Safe version in ${type}`
+                details: `Safe version in ${type}`,
+                detection_context: SCAN_CONTEXT
             });
         }
     }
@@ -1718,6 +1746,19 @@ function checkLockfile(lockPath, badPackages, safeMatchLevel = 2) {
     scanStats.lockfilesChecked++;
 
     const fileName = path.basename(lockPath);
+    
+    // Save current context and set appropriate lockfile context
+    const savedContext = SCAN_CONTEXT;
+    
+    // Determine appropriate lockfile context based on current state
+    if (!SCAN_CONTEXT.includes('LOCK_FILE')) {
+        // If we're in NODE_MODULES or scanning a project directory with lockfile present
+        if (SCAN_CONTEXT === 'NODE_MODULES' || lockPath.includes('node_modules')) {
+            SCAN_CONTEXT = 'DEPENDENCY_LOCK_FILE';
+        } else {
+            SCAN_CONTEXT = 'PARENT_LOCK_FILE';
+        }
+    }
 
     const { content, error, size } = safeReadFile(lockPath, CONFIG.MAX_LOCKFILE_SIZE_BYTES);
     if (error) {
@@ -1798,6 +1839,9 @@ function checkLockfile(lockPath, badPackages, safeMatchLevel = 2) {
             }
         }
     }
+    
+    // Restore original context
+    SCAN_CONTEXT = savedContext;
 }
 
 // ============================================================================
@@ -1821,6 +1865,7 @@ function generateReport(userInfo, isPartial = false) {
         'Package',
         'Version',
         'Location',
+        'Detection_Context',
         'Details'
     ];
 
@@ -1844,6 +1889,7 @@ function generateReport(userInfo, isPartial = false) {
             escapeCSV(issue.package),
             escapeCSV(issue.version),
             escapeCSV(issue.location),
+            escapeCSV(issue.detection_context || 'UNKNOWN'),
             escapeCSV(issue.details || '')
         ];
         csvContent += row.join(',') + '\n';
@@ -2110,6 +2156,7 @@ ${colors.cyan}EXIT CODES:${colors.reset}
     if (isProjectOnlyMode) {
         console.log(`${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`);
         console.log(`    > Scanning Project Dir: ${scanPath}`);
+        SCAN_CONTEXT = 'PROJECT_DIR';
         scanDir(scanPath, badPackages, 0, maxDepth, safeMatchLevel);
     } else {
         console.log(`${colors.yellow}    > Mode: Full System Scan${colors.reset}`);
@@ -2118,11 +2165,20 @@ ${colors.cyan}EXIT CODES:${colors.reset}
         systemPaths.forEach(p => {
             if (isShuttingDown) return;
             console.log(`    > Scanning System Path: ${p}`);
+            // Determine cache type from path
+            if (p.includes('npm')) SCAN_CONTEXT = 'NPM_CACHE';
+            else if (p.includes('yarn') || p.includes('Yarn')) SCAN_CONTEXT = 'YARN_CACHE';
+            else if (p.includes('pnpm')) SCAN_CONTEXT = 'PNPM_STORE';
+            else if (p.includes('bun') || p.includes('Bun')) SCAN_CONTEXT = 'BUN_CACHE';
+            else if (p.includes('nvm') || p.includes('NVM')) SCAN_CONTEXT = 'NVM_VERSION';
+            else if (p.includes('node_modules')) SCAN_CONTEXT = 'GLOBAL_MODULES';
+            else SCAN_CONTEXT = 'SYSTEM_CACHE';
             scanDir(p, badPackages, 0, maxDepth, safeMatchLevel);
         });
 
         if (!isShuttingDown) {
             console.log(`    > Scanning Project Dir: ${scanPath}`);
+            SCAN_CONTEXT = 'PROJECT_DIR';
             scanDir(scanPath, badPackages, 0, maxDepth, safeMatchLevel);
         }
     }
