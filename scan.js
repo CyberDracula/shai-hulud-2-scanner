@@ -30,6 +30,16 @@ const os = require('os');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 
+// Load scanner version from package.json
+let SCANNER_VERSION = '2.1.0'; // fallback
+try {
+    const pkgJsonPath = path.join(__dirname, 'package.json');
+    const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    SCANNER_VERSION = pkgJson.version || SCANNER_VERSION;
+} catch (e) {
+    // Use fallback if package.json not found
+}
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -429,6 +439,7 @@ function setupSignalHandlers() {
 
 function getUserInfo() {
     console.log(`${colors.cyan}[1/5] Identifying User Environment...${colors.reset}`);
+    
     const info = {
         gitName: 'Unknown',
         gitEmail: 'Unknown',
@@ -436,7 +447,7 @@ function getUserInfo() {
         hostname: os.hostname(),
         platform: os.platform(),
         nodeVersion: process.version,
-        scannerVersion: '2.1.0-hardened'
+        scannerVersion: SCANNER_VERSION
     };
 
     try {
@@ -462,6 +473,7 @@ function getUserInfo() {
     console.log(`    > NPM User: ${info.npmUser}`);
     console.log(`    > Host: ${info.hostname} (${info.platform})`);
     console.log(`    > Node: ${info.nodeVersion}`);
+    console.log(`    > Scanner Version: ${info.scannerVersion}`);
 
     return info;
 }
@@ -670,7 +682,7 @@ function fetchWithCache(url, cacheFile, fallbackFile, sourceName, forceNoCache =
         const req = https.get(url, {
             timeout: CONFIG.NETWORK_TIMEOUT_MS,
             headers: {
-                'User-Agent': 'Shai-Hulud-Scanner/2.1.0'
+                'User-Agent': 'Shai-Hulud-Scanner/' + SCANNER_VERSION
             }
         }, (res) => {
             clearTimeout(timeout);
@@ -1628,10 +1640,7 @@ function generateReport(userInfo, isPartial = false) {
         'Package',
         'Version',
         'Location',
-        'Details',
-        'Scan_Duration_MS',
-        'Directories_Scanned',
-        'Packages_Scanned'
+        'Details'
     ];
 
     let csvContent = headers.join(',') + '\n';
@@ -1649,15 +1658,12 @@ function generateReport(userInfo, isPartial = false) {
             escapeCSV(userInfo.npmUser),
             escapeCSV(userInfo.platform),
             escapeCSV(userInfo.nodeVersion || process.version),
-            escapeCSV(userInfo.scannerVersion || '2.1.0-hardened'),
+            escapeCSV(userInfo.scannerVersion || SCANNER_VERSION),
             escapeCSV(issue.type),
             escapeCSV(issue.package),
             escapeCSV(issue.version),
             escapeCSV(issue.location),
-            escapeCSV(issue.details || ''),
-            escapeCSV(String(duration)),
-            escapeCSV(String(scanStats.directoriesScanned)),
-            escapeCSV(String(scanStats.packagesScanned))
+            escapeCSV(issue.details || '')
         ];
         csvContent += row.join(',') + '\n';
     });
@@ -1702,6 +1708,8 @@ async function uploadReport(csvContent, userInfo) {
         return;
     }
 
+    const duration = scanStats.startTime ? Date.now() - scanStats.startTime : 0;
+    
     const payload = JSON.stringify({
         userInfo: {
             hostname: userInfo.hostname,
@@ -1715,6 +1723,15 @@ async function uploadReport(csvContent, userInfo) {
         criticalCount: detectedIssues.filter(i =>
             ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT'].includes(i.type)
         ).length,
+        scanStats: {
+            duration: duration,
+            directoriesScanned: scanStats.directoriesScanned,
+            packagesScanned: scanStats.packagesScanned,
+            filesChecked: scanStats.filesChecked,
+            lockfilesChecked: scanStats.lockfilesChecked,
+            symlinksSkipped: scanStats.symlinksSkipped,
+            errorsEncountered: scanStats.errorsEncountered
+        },
         report: csvContent
     });
 
@@ -1723,7 +1740,7 @@ async function uploadReport(csvContent, userInfo) {
         headers: {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(payload),
-            'User-Agent': 'Shai-Hulud-Scanner/2.1.0',
+            'User-Agent': 'Shai-Hulud-Scanner/' + SCANNER_VERSION,
             ...(API_KEY && { 'x-api-key': API_KEY })
         },
         timeout: 30000
