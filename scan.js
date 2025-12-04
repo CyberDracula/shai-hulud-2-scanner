@@ -1517,10 +1517,15 @@ function checkDependencies(deps, depType, pkgPath, badPackages, safeMatchLevel =
         }
         
         // Check for exact version match
-        const versionMatch = versionSpec.match(/[\d]+\.[\d]+\.[\d]+/);
-        const cleanVersion = versionMatch ? versionMatch[0] : versionSpec;
-        
-        if (targetVersions.has(cleanVersion) || targetVersions.has(versionSpec)) {
+        // Extract a semver-like token (core x.y.z plus optional prerelease/build metadata)
+        // Examples matched: 1.2.3, 1.2.3-alpha.1, 1.2.3+build.1
+        const versionMatch = String(versionSpec).match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?)/);
+        const fullVersion = versionMatch ? versionMatch[1] : versionSpec;
+        // coreVersion removes any prerelease/build metadata so comparisons against plain x.y.z work
+        // Only derive coreVersion from fullVersion when we actually matched a semver token.
+        const coreVersion = versionMatch ? String(fullVersion).split(/[+-]/)[0] : versionSpec;
+
+        if (targetVersions.has(coreVersion) || targetVersions.has(fullVersion) || targetVersions.has(versionSpec)) {
             console.log(`${colors.red}    [!] DEPENDENCY ALERT: ${sanitizeForLog(pkgName)}@${sanitizeForLog(versionSpec)} in ${depType} (EXACT MATCH)${colors.reset}`);
             detectedIssues.push({
                 type: 'DEPENDENCY_HIT',
@@ -1897,7 +1902,7 @@ async function uploadReport(csvContent, userInfo) {
         reportHash: computeHash(csvContent),
         issueCount: detectedIssues.length,
         criticalCount: detectedIssues.filter(i =>
-            ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT'].includes(i.type)
+            ['FORENSIC_MATCH', 'CRITICAL_SCRIPT', 'VERSION_MATCH', 'WILDCARD_MATCH', 'LOCKFILE_HIT', 'WILDCARD_LOCK_HIT', 'WILDCARD_DEPENDENCY_HIT', 'DEPENDENCY_HIT'].includes(i.type)
         ).length,
         scanStats: {
             duration: duration,
