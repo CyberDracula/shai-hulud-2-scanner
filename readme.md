@@ -66,6 +66,17 @@ This runs the test suite (`test-scoped-packages.js`) which validates:
 - ✅ Actual malicious packages are correctly detected
 - ✅ Package name matching is exact (no substring matching)
 
+To see a comparison between the old (broken) and new (fixed) behavior:
+
+```bash
+npm run test:regression
+```
+
+This regression test demonstrates:
+- ❌ **OLD REGEX**: Scoped packages were silently skipped (0 detected)
+- ✅ **NEW REGEX**: Scoped packages are correctly detected (2 detected)
+- ✅ No false positives on legitimate scoped packages
+
 ## 🏃Usage
 
 You can run the script directly with Node, or use the provided helper scripts.
