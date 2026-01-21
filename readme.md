@@ -53,6 +53,19 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 1.  Download `scan.js` to a centralized folder.
 2.  Run it immediately — no installation needed!
 
+## 🧪 Testing
+
+To verify the scanner correctly handles scoped packages and prevents false positives:
+
+```bash
+npm test
+```
+
+This runs the test suite (`test-scoped-packages.js`) which validates:
+- ✅ Scoped packages (e.g., `@babel/plugin-syntax-class-properties`) are NOT flagged when searching for unscoped malicious packages (e.g., `syntax-class-properties`)
+- ✅ Actual malicious packages are correctly detected
+- ✅ Package name matching is exact (no substring matching)
+
 ## 🏃Usage
 
 You can run the script directly with Node, or use the provided helper scripts.

@@ -7,7 +7,8 @@
     "shai-hulud-scanner": "./scan.js"
   },
   "scripts": {
-    "start": "node scan.js"
+    "start": "node scan.js",
+    "test": "node test-scoped-packages.js"
   },
   "keywords": ["security", "malware", "scanner", "shai-hulud", "npm", "forensic"],
   "author": "CyberDracula",
