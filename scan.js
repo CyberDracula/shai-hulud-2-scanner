@@ -1503,9 +1503,9 @@ function checkLockfile(lockPath, badPackages) {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             
-            // Package declaration line (e.g., "pkg@^1.0.0:")
+            // Package declaration line (e.g., "pkg@^1.0.0:" or "@scope/pkg@^1.0.0:")
             if (line && !line.startsWith(' ') && line.includes('@') && line.endsWith(':')) {
-                const match = line.match(/^"?([^@"]+)@/);
+                const match = line.match(/^"?(@?[^@"]+)@/);
                 if (match) {
                     currentPkg = match[1];
                     currentVersion = null;
