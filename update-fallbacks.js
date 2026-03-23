@@ -46,22 +46,33 @@ function downloadFile(url, destination, name) {
   return new Promise((resolve, reject) => {
     console.log(`${colors.cyan}Downloading ${name}...${colors.reset}`);
 
+    // Use a settled flag + req reference so the timeout can abort the in-flight
+    // request and prevent double-resolution or stale cache writes.
+    let settled = false;
+    let req = null;
+
     const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (req) req.destroy();
       reject(new Error(`Timeout downloading ${name}`));
     }, 30000); // 30 second timeout
 
-    https
+    req = https
       .get(url, (res) => {
         clearTimeout(timeout);
+        if (settled) { res.destroy(); return; }
 
         if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode} for ${name}`));
+          if (!settled) { settled = true; reject(new Error(`HTTP ${res.statusCode} for ${name}`)); }
           return;
         }
 
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
+          if (settled) return;
+          settled = true;
           try {
             fs.writeFileSync(destination, data, "utf8");
             const size = (Buffer.byteLength(data) / 1024).toFixed(2);
@@ -75,6 +86,8 @@ function downloadFile(url, destination, name) {
         });
       })
       .on("error", (e) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
         reject(e);
       });

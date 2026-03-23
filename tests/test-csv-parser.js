@@ -4,32 +4,8 @@
  * Tests multi-version CSV parsing capabilities
  */
 
-// Copy of the parseWizCSV function from scan.js
-function parseWizCSV(data) {
-    const lines = data.split('\n').filter(l => l.trim() !== '');
-    const result = {};
-    const startIdx = lines[0].toLowerCase().includes('package') ? 1 : 0;
-    for (let i = startIdx; i < lines.length; i++) {
-        const parts = lines[i].split(',');
-        if (parts.length >= 2) {
-            const rawName = parts[0].replace(/["']/g, '').trim();
-            
-            // Get version field (everything after first comma)
-            const versionField = parts.slice(1).join(',').trim();
-            
-            // Split by || to handle multi-version format: "= 1.0.4 || = 1.0.3 || = 1.0.2"
-            const versions = versionField.split('||').map(v => 
-                v.replace(/["'=<>v\s]/g, '').trim()
-            ).filter(v => v !== '');
-            
-            if (rawName && versions.length > 0) {
-                if (!result[rawName]) result[rawName] = [];
-                result[rawName].push(...versions);
-            }
-        }
-    }
-    return result;
-}
+// Use the production parseWizCSV implementation from scan.js
+const { parseWizCSV } = require('../scan');
 
 // Test helpers
 const colors = {

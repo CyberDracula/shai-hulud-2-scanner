@@ -64,6 +64,9 @@ const CONFIG = Object.freeze({
   // Scan Stats Limits (prevent infinite loops)
   MAX_DIRECTORIES_SCANNED: 100000,
   MAX_PACKAGES_SCANNED: 50000,
+
+  // Scanner identity
+  VERSION: "2.2.0",
 });
 
 // Derived cache paths
@@ -468,7 +471,6 @@ const WARNING_PATTERNS = [
 
 const detectedIssues = [];
 const campaignMap = new Map(); // package name -> campaign label (e.g. 'CANISTERWORM', 'SHAI_HULUD_2')
-let canisterwormPackages = new Set(); // package names identified as CanisterWorm IOCs
 const scanStats = {
   directoriesScanned: 0,
   packagesScanned: 0,
@@ -956,7 +958,6 @@ async function fetchThreats(forceNoCache = false) {
           vers.forEach((v) => badPackages[pkg].add(v));
         }
         campaignMap.set(pkg, "CANISTERWORM"); // Overrides any prior campaign tag
-        canisterwormPackages.add(pkg);
       }
       console.log(
         `    > [Source 3] CanisterWorm IOCs: ${colors.cyan}${Object.keys(parsed).length} packages${colors.reset} loaded from bundled CSV.`,
@@ -1023,7 +1024,15 @@ function fetchWithCache(
     }
 
     // 3. Try to fetch from network with timeout
+    // Use a settled flag to prevent double resolution if the timeout fires while
+    // the response is in flight (CWE-367 TOCTOU guard).
+    let settled = false;
+    let req = null;
+
     const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (req) req.destroy();
       console.log(
         `    > ${sourceName}: ${colors.yellow}Network timeout, trying fallback...${colors.reset}`,
       );
@@ -1032,16 +1041,17 @@ function fetchWithCache(
       else reject(new Error("Timeout and no fallback available"));
     }, CONFIG.NETWORK_TIMEOUT_MS);
 
-    const req = https.get(
+    req = https.get(
       url,
       {
         timeout: CONFIG.NETWORK_TIMEOUT_MS,
         headers: {
-          "User-Agent": "Shai-Hulud-Scanner/2.1.0",
+          "User-Agent": `Shai-Hulud-Scanner/${CONFIG.VERSION}`,
         },
       },
       (res) => {
         clearTimeout(timeout);
+        if (settled) { res.destroy(); return; }
 
         // Check for redirects (limit to prevent infinite loops)
         if (
@@ -1050,6 +1060,7 @@ function fetchWithCache(
           res.headers.location
         ) {
           // Don't follow redirects automatically for security
+          settled = true;
           console.log(
             `    > ${sourceName}: ${colors.yellow}Redirect detected, using fallback...${colors.reset}`,
           );
@@ -1063,8 +1074,10 @@ function fetchWithCache(
         const maxBytes = 10 * 1024 * 1024; // 10MB max download
 
         res.on("data", (chunk) => {
+          if (settled) { res.destroy(); return; }
           receivedBytes += chunk.length;
           if (receivedBytes > maxBytes) {
+            settled = true;
             res.destroy();
             reject(new Error("Response too large"));
             return;
@@ -1073,6 +1086,8 @@ function fetchWithCache(
         });
 
         res.on("end", () => {
+          if (settled) return;
+          settled = true;
           if (res.statusCode >= 200 && res.statusCode < 300) {
             console.log(
               `    > ${sourceName}: Downloaded from network (${(receivedBytes / 1024).toFixed(1)}KB).`,
@@ -1092,6 +1107,8 @@ function fetchWithCache(
     );
 
     req.on("error", (e) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       console.log(
         `    > ${sourceName}: ${colors.yellow}Network error, trying fallback...${colors.reset}`,
@@ -1651,6 +1668,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         version: "UNKNOWN",
         location: pkgPath,
         details: "Missing or invalid version field",
+        campaign: campaignMap.get(pkgName) || "",
       });
       return;
     }
@@ -2258,7 +2276,7 @@ async function uploadReport(csvContent, userInfo) {
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
-      "User-Agent": "Shai-Hulud-Scanner/2.1.0",
+      "User-Agent": `Shai-Hulud-Scanner/${CONFIG.VERSION}`,
       ...(API_KEY && { "x-api-key": API_KEY }),
     },
     timeout: 30000,
@@ -2423,6 +2441,7 @@ ${colors.cyan}EXIT CODES:${colors.reset}
 // MAIN ENTRY POINT
 // ============================================================================
 
+if (require.main === module) {
 (async () => {
   const args = process.argv.slice(2);
 
@@ -2627,3 +2646,7 @@ ${colors.cyan}EXIT CODES:${colors.reset}
   }
   // If --fail-on not provided, exit normally (code 0)
 })();
+}
+
+// Export testable functions (used by tests/test-csv-parser.js)
+module.exports = { parseWizCSV };

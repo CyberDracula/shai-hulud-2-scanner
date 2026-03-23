@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `.local/share/pgmon` — Python implant installation path
 
 - **Campaign Tagging in Reports**
-  - All `detectedIssues` objects now carry a `campaign` field (`CANISTERWORM`, `SHAI_HULUD_2`, or empty)
-  - CSV report gains a new **`Campaign`** column (inserted after `Issue_Type`) for easy filtering in spreadsheet tools
+  - `detectedIssues` objects can now carry an optional `campaign` field (`CANISTERWORM`, `SHAI_HULUD_2`, or empty) when a campaign is known
+  - CSV report gains a new **`Campaign`** column (inserted after `Issue_Type`) for easy filtering and correlation in spreadsheet tools
   - `campaignMap` (module-level Map) populated at IOC-load time; CanisterWorm entries take precedence over any prior Shai-Hulud tag for the same package
 
 - **CanisterWorm Incident Response Advisory**
