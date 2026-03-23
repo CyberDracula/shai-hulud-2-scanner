@@ -1051,7 +1051,10 @@ function fetchWithCache(
       },
       (res) => {
         clearTimeout(timeout);
-        if (settled) { res.destroy(); return; }
+        if (settled) {
+          res.destroy();
+          return;
+        }
 
         // Check for redirects (limit to prevent infinite loops)
         if (
@@ -1074,7 +1077,10 @@ function fetchWithCache(
         const maxBytes = 10 * 1024 * 1024; // 10MB max download
 
         res.on("data", (chunk) => {
-          if (settled) { res.destroy(); return; }
+          if (settled) {
+            res.destroy();
+            return;
+          }
           receivedBytes += chunk.length;
           if (receivedBytes > maxBytes) {
             settled = true;
@@ -2027,6 +2033,75 @@ function checkVersionMatch(pkg, ver, badVersions, lockPath, type) {
   }
 }
 
+/**
+ * Parse a yarn.lock file's content and return any hits against the denylist.
+ * Exported for unit-testing.
+ *
+ * @param {string} content     - Raw yarn.lock file text
+ * @param {Object} badPackages - Map of pkg name → Set of bad versions ("*" = any)
+ * @param {Map}    campaignMap - Map of pkg name → campaign string
+ * @param {string} lockPath    - Path used in the `location` field of each hit
+ * @returns {Array} Array of hit objects compatible with detectedIssues entries
+ */
+function parseYarnLock(content, badPackages, campaignMap, lockPath) {
+  const hits = [];
+  const lines = content.split("\n");
+  let currentPkg = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Package declaration line (e.g., "pkg@^1.0.0:" or "@scope/pkg@^1.0.0:")
+    if (
+      line &&
+      !line.startsWith(" ") &&
+      line.includes("@") &&
+      line.endsWith(":")
+    ) {
+      // Try scoped (@scope/name) first, then bare name. Bounded quantifiers (ReDoS-safe).
+      const match = line.match(
+        /^"?(@[^/@"]{1,100}\/[^@"]{1,100}|[^@"]{1,200})@/,
+      );
+      if (match) {
+        currentPkg = match[1];
+      }
+    }
+    // Version line (e.g., "  version \"1.0.0\"")
+    else if (currentPkg && line.trim().startsWith("version ")) {
+      const versionMatch = line.match(/version\s+"([^"]+)"/);
+      if (versionMatch) {
+        const currentVersion = versionMatch[1];
+
+        if (badPackages[currentPkg]) {
+          const badVersions = badPackages[currentPkg];
+          if (badVersions.has("*")) {
+            hits.push({
+              type: "WILDCARD_LOCK_HIT",
+              package: currentPkg,
+              version: currentVersion,
+              location: lockPath,
+              details: "Yarn Lock match (Wildcard)",
+              campaign: campaignMap.get(currentPkg) || "",
+            });
+          } else if (badVersions.has(currentVersion)) {
+            hits.push({
+              type: "LOCKFILE_HIT",
+              package: currentPkg,
+              version: currentVersion,
+              location: lockPath,
+              details: "Yarn Lock match (Strict)",
+              campaign: campaignMap.get(currentPkg) || "",
+            });
+          }
+        }
+        currentPkg = null; // Reset after processing
+      }
+    }
+  }
+
+  return hits;
+}
+
 function checkLockfile(lockPath, badPackages) {
   if (isShuttingDown) return;
 
@@ -2080,61 +2155,8 @@ function checkLockfile(lockPath, badPackages) {
 
   // --- 2. Yarn Lockfile ---
   else if (fileName === "yarn.lock") {
-    // Parse yarn.lock once and check against badPackages
-    // This is much faster than regex matching for each package×version combination
-    const lines = content.split("\n");
-    let currentPkg = null;
-    let currentVersion = null;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Package declaration line (e.g., "pkg@^1.0.0:")
-      if (
-        line &&
-        !line.startsWith(" ") &&
-        line.includes("@") &&
-        line.endsWith(":")
-      ) {
-        const match = line.match(/^"?([^@"]+)@/);
-        if (match) {
-          currentPkg = match[1];
-          currentVersion = null;
-        }
-      }
-      // Version line (e.g., "  version "1.0.0"")
-      else if (currentPkg && line.trim().startsWith("version ")) {
-        const versionMatch = line.match(/version\s+"([^"]+)"/);
-        if (versionMatch) {
-          currentVersion = versionMatch[1];
-
-          // Check if this package/version is in our denylist
-          if (badPackages[currentPkg]) {
-            const badVersions = badPackages[currentPkg];
-            if (badVersions.has("*")) {
-              detectedIssues.push({
-                type: "WILDCARD_LOCK_HIT",
-                package: currentPkg,
-                version: currentVersion,
-                location: lockPath,
-                details: "Yarn Lock match (Wildcard)",
-                campaign: campaignMap.get(currentPkg) || "",
-              });
-            } else if (badVersions.has(currentVersion)) {
-              detectedIssues.push({
-                type: "LOCKFILE_HIT",
-                package: currentPkg,
-                version: currentVersion,
-                location: lockPath,
-                details: "Yarn Lock match (Strict)",
-                campaign: campaignMap.get(currentPkg) || "",
-              });
-            }
-          }
-          currentPkg = null; // Reset after processing
-        }
-      }
-    }
+    const hits = parseYarnLock(content, badPackages, campaignMap, lockPath);
+    hits.forEach((h) => detectedIssues.push(h));
   }
 }
 
@@ -2442,211 +2464,219 @@ ${colors.cyan}EXIT CODES:${colors.reset}
 // ============================================================================
 
 if (require.main === module) {
-(async () => {
-  const args = process.argv.slice(2);
+  (async () => {
+    const args = process.argv.slice(2);
 
-  // Help check
-  if (args.includes("--help") || args.includes("-h")) {
-    printHelp();
-    process.exit(0);
-  }
-
-  setupSignalHandlers();
-  scanStats.startTime = Date.now();
-
-  console.log(
-    `\n${colors.yellow}=== Shai-Hulud 2.0 / CanisterWorm Detector (v2.2.0) ===${colors.reset}`,
-  );
-
-  // Parse arguments
-  const pathArg = args.find((arg) => !arg.startsWith("--"));
-  const inputPath = pathArg || process.cwd();
-  const isFullScan = args.includes("--full-scan");
-  const shouldUpload = !args.includes("--no-upload");
-  const noCache = args.includes("--no-cache");
-
-  // Validate and normalize scan path
-  const scanPath = validatePath(inputPath);
-  if (!scanPath) {
-    console.error(
-      `${colors.red}Error: Invalid scan path provided${colors.reset}`,
-    );
-    process.exit(1);
-  }
-
-  if (!fs.existsSync(scanPath)) {
-    console.error(
-      `${colors.red}Error: Path does not exist: ${sanitizeForLog(scanPath)}${colors.reset}`,
-    );
-    process.exit(1);
-  }
-
-  // Parse depth
-  let maxDepth = CONFIG.DEFAULT_SCAN_DEPTH;
-  const depthEqArg = args.find((a) => a.startsWith("--depth="));
-  const depthIdx = args.findIndex((a) => a === "--depth");
-  if (depthEqArg) {
-    const val = Number(depthEqArg.split("=")[1]);
-    if (!Number.isNaN(val) && val >= 0 && val <= CONFIG.MAX_SCAN_DEPTH) {
-      maxDepth = val;
+    // Help check
+    if (args.includes("--help") || args.includes("-h")) {
+      printHelp();
+      process.exit(0);
     }
-  } else if (depthIdx !== -1 && args[depthIdx + 1]) {
-    const val = Number(args[depthIdx + 1]);
-    if (!Number.isNaN(val) && val >= 0 && val <= CONFIG.MAX_SCAN_DEPTH) {
-      maxDepth = val;
-    }
-  }
 
-  // Parse fail-on
-  let failOn = CONFIG.DEFAULT_FAIL_ON;
-  const failOnEqArg = args.find((a) => a.startsWith("--fail-on="));
-  const failOnIdx = args.findIndex((a) => a === "--fail-on");
-  if (failOnEqArg) {
-    const val = failOnEqArg.split("=")[1].toLowerCase();
-    if (["critical", "warning", "off"].includes(val)) failOn = val;
-  } else if (failOnIdx !== -1 && args[failOnIdx + 1]) {
-    const val = args[failOnIdx + 1].toLowerCase();
-    if (["critical", "warning", "off"].includes(val)) failOn = val;
-  }
+    setupSignalHandlers();
+    scanStats.startTime = Date.now();
 
-  const isProjectOnlyMode = pathArg && !isFullScan;
-
-  const userInfo = getUserInfo();
-  const badPackages = await fetchThreats(noCache);
-
-  if (Object.keys(badPackages).length === 0) {
     console.log(
-      `${colors.yellow}    > Warning: No threat intelligence loaded. Continuing with forensic checks only.${colors.reset}`,
+      `\n${colors.yellow}=== Shai-Hulud 2.0 / CanisterWorm Detector (v2.2.0) ===${colors.reset}`,
     );
-  }
 
-  console.log(`\n${colors.cyan}[4/5] Starting Deep Scan...${colors.reset}`);
-  console.log(`    > Max Depth: ${maxDepth}`);
+    // Parse arguments
+    const pathArg = args.find((arg) => !arg.startsWith("--"));
+    const inputPath = pathArg || process.cwd();
+    const isFullScan = args.includes("--full-scan");
+    const shouldUpload = !args.includes("--no-upload");
+    const noCache = args.includes("--no-cache");
 
-  if (isProjectOnlyMode) {
-    console.log(`${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`);
-    console.log(`    > Scanning Project Dir: ${scanPath}`);
-    scanDir(scanPath, badPackages, 0, maxDepth);
-  } else {
-    console.log(`${colors.yellow}    > Mode: Full System Scan${colors.reset}`);
-    const systemPaths = getSearchPaths();
+    // Validate and normalize scan path
+    const scanPath = validatePath(inputPath);
+    if (!scanPath) {
+      console.error(
+        `${colors.red}Error: Invalid scan path provided${colors.reset}`,
+      );
+      process.exit(1);
+    }
 
-    systemPaths.forEach((p) => {
-      if (isShuttingDown) return;
-      console.log(`    > Scanning System Path: ${p}`);
-      scanDir(p, badPackages, 0, maxDepth);
-    });
+    if (!fs.existsSync(scanPath)) {
+      console.error(
+        `${colors.red}Error: Path does not exist: ${sanitizeForLog(scanPath)}${colors.reset}`,
+      );
+      process.exit(1);
+    }
 
-    if (!isShuttingDown) {
+    // Parse depth
+    let maxDepth = CONFIG.DEFAULT_SCAN_DEPTH;
+    const depthEqArg = args.find((a) => a.startsWith("--depth="));
+    const depthIdx = args.findIndex((a) => a === "--depth");
+    if (depthEqArg) {
+      const val = Number(depthEqArg.split("=")[1]);
+      if (!Number.isNaN(val) && val >= 0 && val <= CONFIG.MAX_SCAN_DEPTH) {
+        maxDepth = val;
+      }
+    } else if (depthIdx !== -1 && args[depthIdx + 1]) {
+      const val = Number(args[depthIdx + 1]);
+      if (!Number.isNaN(val) && val >= 0 && val <= CONFIG.MAX_SCAN_DEPTH) {
+        maxDepth = val;
+      }
+    }
+
+    // Parse fail-on
+    let failOn = CONFIG.DEFAULT_FAIL_ON;
+    const failOnEqArg = args.find((a) => a.startsWith("--fail-on="));
+    const failOnIdx = args.findIndex((a) => a === "--fail-on");
+    if (failOnEqArg) {
+      const val = failOnEqArg.split("=")[1].toLowerCase();
+      if (["critical", "warning", "off"].includes(val)) failOn = val;
+    } else if (failOnIdx !== -1 && args[failOnIdx + 1]) {
+      const val = args[failOnIdx + 1].toLowerCase();
+      if (["critical", "warning", "off"].includes(val)) failOn = val;
+    }
+
+    const isProjectOnlyMode = pathArg && !isFullScan;
+
+    const userInfo = getUserInfo();
+    const badPackages = await fetchThreats(noCache);
+
+    if (Object.keys(badPackages).length === 0) {
+      console.log(
+        `${colors.yellow}    > Warning: No threat intelligence loaded. Continuing with forensic checks only.${colors.reset}`,
+      );
+    }
+
+    console.log(`\n${colors.cyan}[4/5] Starting Deep Scan...${colors.reset}`);
+    console.log(`    > Max Depth: ${maxDepth}`);
+
+    if (isProjectOnlyMode) {
+      console.log(
+        `${colors.yellow}    > Mode: Project-Only Scan${colors.reset}`,
+      );
       console.log(`    > Scanning Project Dir: ${scanPath}`);
       scanDir(scanPath, badPackages, 0, maxDepth);
-    }
-  }
-
-  // 3. Summary
-  const threats = detectedIssues.filter((i) => i.type !== "SAFE_MATCH");
-  const duration = Date.now() - scanStats.startTime;
-
-  console.log(
-    `\n${colors.dim}    Scan Stats: ${scanStats.directoriesScanned} dirs, ${scanStats.packagesScanned} packages, ${scanStats.lockfilesChecked} lockfiles in ${(duration / 1000).toFixed(1)}s${colors.reset}`,
-  );
-
-  if (scanStats.symlinksSkipped > 0) {
-    console.log(
-      `${colors.dim}    Symlinks skipped: ${scanStats.symlinksSkipped}${colors.reset}`,
-    );
-  }
-
-  if (threats.length > 0) {
-    console.log(
-      `\n${colors.red}!!! THREATS DETECTED: ${threats.length} !!!${colors.reset}`,
-    );
-  } else if (detectedIssues.length > 0) {
-    console.log(
-      `\n${colors.green}✓ System clean. (Found ${detectedIssues.length} safe versions for audit).${colors.reset}`,
-    );
-  } else {
-    console.log(
-      `\n${colors.green}✓ System clean. No target packages found.${colors.reset}`,
-    );
-  }
-
-  // Show CanisterWorm advisory if any CanisterWorm findings were detected
-  const hasCanisterWormFindings = threats.some(
-    (i) => i.campaign === "CANISTERWORM",
-  );
-  if (hasCanisterWormFindings) {
-    printCanisterWormAdvisory();
-  }
-
-  const reportCSV = generateReport(userInfo);
-  // --- UPLOAD LOGIC ---
-  if (detectedIssues.length === 0) {
-    console.log(
-      `${colors.dim}    > Report is empty. Skipping upload.${colors.reset}`,
-    );
-  } else if (shouldUpload) {
-    await uploadReport(reportCSV, userInfo);
-  } else {
-    console.log(
-      `${colors.dim}    > Upload skipped (disabled by user).${colors.reset}`,
-    );
-  }
-
-  // --- CI/CD EXIT CODE LOGIC ---
-  // Only apply exit code logic if --fail-on flag was explicitly provided
-  if (failOnEqArg || failOnIdx !== -1) {
-    const criticalTypes = [
-      "FORENSIC_MATCH",
-      "CRITICAL_SCRIPT",
-      "VERSION_MATCH",
-      "WILDCARD_MATCH",
-      "LOCKFILE_HIT",
-      "WILDCARD_LOCK_HIT",
-    ];
-    const warningTypes = ["SCRIPT_WARNING", "GHOST_PACKAGE", "CORRUPT_PACKAGE"];
-
-    const criticalCount = detectedIssues.filter((i) =>
-      criticalTypes.includes(i.type),
-    ).length;
-    const warningCount = detectedIssues.filter((i) =>
-      warningTypes.includes(i.type),
-    ).length;
-
-    if (failOn === "off") {
+    } else {
       console.log(
-        `${colors.dim}\n[CI/CD] Exit mode: OFF - Always exiting with code 0${colors.reset}`,
+        `${colors.yellow}    > Mode: Full System Scan${colors.reset}`,
       );
-      process.exit(0);
-    } else if (failOn === "critical") {
-      if (criticalCount > 0) {
-        console.log(
-          `${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical finding(s) detected (--fail-on=critical)${colors.reset}`,
-        );
-        process.exit(1);
-      } else {
-        console.log(
-          `${colors.green}\n[CI/CD] PASS: No critical findings (${warningCount} warning(s) ignored)${colors.reset}`,
-        );
-        process.exit(0);
-      }
-    } else if (failOn === "warning") {
-      if (criticalCount > 0 || warningCount > 0) {
-        console.log(
-          `${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical, ${warningCount} warning(s) detected (--fail-on=warning)${colors.reset}`,
-        );
-        process.exit(1);
-      } else {
-        console.log(
-          `${colors.green}\n[CI/CD] PASS: No critical or warning findings${colors.reset}`,
-        );
-        process.exit(0);
+      const systemPaths = getSearchPaths();
+
+      systemPaths.forEach((p) => {
+        if (isShuttingDown) return;
+        console.log(`    > Scanning System Path: ${p}`);
+        scanDir(p, badPackages, 0, maxDepth);
+      });
+
+      if (!isShuttingDown) {
+        console.log(`    > Scanning Project Dir: ${scanPath}`);
+        scanDir(scanPath, badPackages, 0, maxDepth);
       }
     }
-  }
-  // If --fail-on not provided, exit normally (code 0)
-})();
+
+    // 3. Summary
+    const threats = detectedIssues.filter((i) => i.type !== "SAFE_MATCH");
+    const duration = Date.now() - scanStats.startTime;
+
+    console.log(
+      `\n${colors.dim}    Scan Stats: ${scanStats.directoriesScanned} dirs, ${scanStats.packagesScanned} packages, ${scanStats.lockfilesChecked} lockfiles in ${(duration / 1000).toFixed(1)}s${colors.reset}`,
+    );
+
+    if (scanStats.symlinksSkipped > 0) {
+      console.log(
+        `${colors.dim}    Symlinks skipped: ${scanStats.symlinksSkipped}${colors.reset}`,
+      );
+    }
+
+    if (threats.length > 0) {
+      console.log(
+        `\n${colors.red}!!! THREATS DETECTED: ${threats.length} !!!${colors.reset}`,
+      );
+    } else if (detectedIssues.length > 0) {
+      console.log(
+        `\n${colors.green}✓ System clean. (Found ${detectedIssues.length} safe versions for audit).${colors.reset}`,
+      );
+    } else {
+      console.log(
+        `\n${colors.green}✓ System clean. No target packages found.${colors.reset}`,
+      );
+    }
+
+    // Show CanisterWorm advisory if any CanisterWorm findings were detected
+    const hasCanisterWormFindings = threats.some(
+      (i) => i.campaign === "CANISTERWORM",
+    );
+    if (hasCanisterWormFindings) {
+      printCanisterWormAdvisory();
+    }
+
+    const reportCSV = generateReport(userInfo);
+    // --- UPLOAD LOGIC ---
+    if (detectedIssues.length === 0) {
+      console.log(
+        `${colors.dim}    > Report is empty. Skipping upload.${colors.reset}`,
+      );
+    } else if (shouldUpload) {
+      await uploadReport(reportCSV, userInfo);
+    } else {
+      console.log(
+        `${colors.dim}    > Upload skipped (disabled by user).${colors.reset}`,
+      );
+    }
+
+    // --- CI/CD EXIT CODE LOGIC ---
+    // Only apply exit code logic if --fail-on flag was explicitly provided
+    if (failOnEqArg || failOnIdx !== -1) {
+      const criticalTypes = [
+        "FORENSIC_MATCH",
+        "CRITICAL_SCRIPT",
+        "VERSION_MATCH",
+        "WILDCARD_MATCH",
+        "LOCKFILE_HIT",
+        "WILDCARD_LOCK_HIT",
+      ];
+      const warningTypes = [
+        "SCRIPT_WARNING",
+        "GHOST_PACKAGE",
+        "CORRUPT_PACKAGE",
+      ];
+
+      const criticalCount = detectedIssues.filter((i) =>
+        criticalTypes.includes(i.type),
+      ).length;
+      const warningCount = detectedIssues.filter((i) =>
+        warningTypes.includes(i.type),
+      ).length;
+
+      if (failOn === "off") {
+        console.log(
+          `${colors.dim}\n[CI/CD] Exit mode: OFF - Always exiting with code 0${colors.reset}`,
+        );
+        process.exit(0);
+      } else if (failOn === "critical") {
+        if (criticalCount > 0) {
+          console.log(
+            `${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical finding(s) detected (--fail-on=critical)${colors.reset}`,
+          );
+          process.exit(1);
+        } else {
+          console.log(
+            `${colors.green}\n[CI/CD] PASS: No critical findings (${warningCount} warning(s) ignored)${colors.reset}`,
+          );
+          process.exit(0);
+        }
+      } else if (failOn === "warning") {
+        if (criticalCount > 0 || warningCount > 0) {
+          console.log(
+            `${colors.red}\n[CI/CD] FAIL: ${criticalCount} critical, ${warningCount} warning(s) detected (--fail-on=warning)${colors.reset}`,
+          );
+          process.exit(1);
+        } else {
+          console.log(
+            `${colors.green}\n[CI/CD] PASS: No critical or warning findings${colors.reset}`,
+          );
+          process.exit(0);
+        }
+      }
+    }
+    // If --fail-on not provided, exit normally (code 0)
+  })();
 }
 
 // Export testable functions (used by tests/test-csv-parser.js)
-module.exports = { parseWizCSV };
+module.exports = { parseWizCSV, parseYarnLock, parseCanisterWormCSV };

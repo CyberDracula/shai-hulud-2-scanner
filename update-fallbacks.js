@@ -61,10 +61,16 @@ function downloadFile(url, destination, name) {
     req = https
       .get(url, (res) => {
         clearTimeout(timeout);
-        if (settled) { res.destroy(); return; }
+        if (settled) {
+          res.destroy();
+          return;
+        }
 
         if (res.statusCode !== 200) {
-          if (!settled) { settled = true; reject(new Error(`HTTP ${res.statusCode} for ${name}`)); }
+          if (!settled) {
+            settled = true;
+            reject(new Error(`HTTP ${res.statusCode} for ${name}`));
+          }
           return;
         }
 
