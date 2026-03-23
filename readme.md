@@ -27,9 +27,10 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 ## 🚀 Features
 
 * **Zero Dependencies:** Runs on standard Node.js (v14+). No 'npm install' required. Audit the code in 1 minute.
-* **Dual Threat Intelligence:** Automatically syncs with two IOC sources:
+* **Triple Threat Intelligence:** Automatically syncs with three IOC sources:
   * [Wiz Research](https://github.com/wiz-sec-public/wiz-research-iocs) - Official Shai-Hulud 2.0 packages (CSV)
   * [Hemachandsai Malicious Packages](https://github.com/hemachandsai/shai-hulud-malicious-packages) - Extended denylist (JSON)
+  * [Socket.dev CanisterWorm Campaign](https://socket.dev/supply-chain-attacks/canisterworm) - TeamPCP self-propagating worm IOCs (bundled CSV, updated with each release)
 * **Smart Caching:** IOC data is cached for 30 minutes to reduce network requests. Automatic fallback to offline data if network is unavailable.
 * **Deep NVM Support:** Automatically detects NVM installations (Windows/macOS/Linux) and scans inside every installed Node version.
 * **Forensic Scan:** Checks for physical malware files (setup_bun.js, bun_environment.js) regardless of version numbers.
@@ -176,22 +177,39 @@ security_scan:
 React Native projects: contents.json files in the ios/ folder are standard iOS asset catalog files (Xcode resources), NOT malware indicators. These are safe to ignore.
 ----------------------------------------------------------------
 
+## 🪱 Keeping the CanisterWorm IOC List Current
+
+The CanisterWorm (`fallback/canisterworm-packages.csv`) list is bundled with this tool and **is not auto-downloaded** at scan time, because the live feed at [socket.dev/supply-chain-attacks/canisterworm](https://socket.dev/supply-chain-attacks/canisterworm) is protected by Cloudflare and cannot be fetched programmatically.
+
+To update it, choose one of:
+
+1. **Pull this repo** — the bundled CSV is kept up to date with each release:
+   ```bash
+   git pull
+   ```
+
+2. **Download manually** — go to [socket.dev/supply-chain-attacks/canisterworm](https://socket.dev/supply-chain-attacks/canisterworm), click the **Download CSV** button, and replace `fallback/canisterworm-packages.csv` with the downloaded file.
+
+Running `node update-fallbacks.js` automatically updates the Wiz and Hemachandsai feeds and reminds you of this step for CanisterWorm.
+
+---
+
 ## Interpreting the Report (shai-hulud-report.csv)
 
 The tool categorizes findings into different severity levels. Understanding what each means is critical for proper response.
 
-| Finding Type | Severity | Description | Action Required |
-|-------------|----------|-------------|-----------------|
-| **FORENSIC_MATCH** | 🔴 **CRITICAL** | High-confidence malware files (setup_bun.js, bun_environment.js, truffleSecrets.json, actionsSecrets.json, .github/workflows/discussion.yml) found with no content verification needed | ⚠️ **SYSTEM COMPROMISED.** See emergency response steps below. |
-| **FORENSIC_ARTIFACT** | 🟠 **HIGH** | Suspicious file detected (bundle.js, contents.json, cloud.json, environment.json) that matches malicious content signatures after deep inspection | Investigate file origin. If legitimate (e.g., React Native contents.json), mark as safe. Otherwise, remove immediately. |
-| **WILDCARD_MATCH** | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious. | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below. |
-| **CRITICAL_SCRIPT** | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement. |
-| **VERSION_MATCH** | 🟠 **HIGH** | Package name and version match the known infected list | Uninstall package. Check lockfiles. Clear caches. |
-| **LOCKFILE_HIT** | 🟠 **HIGH** | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install` | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate. |
-| **WILDCARD_LOCK_HIT** | 🟠 **HIGH** | Lockfile contains a dependency that is known malware (any version). | Delete lockfile, remove dependency, regenerate with safe versions. |
-| **GHOST_PACKAGE** | 🟡 **WARNING** | Folder exists with a targeted name, but is empty/broken | Investigate manually. Likely a failed install or cleanup artifact. |
-| **SCRIPT_WARNING** | 🟡 **WARNING** | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`) | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket. |
-| **SAFE_MATCH** | 🔵 **INFO** | Package name matches a target, but the version is safe | No action needed. Logged for audit purposes. |
+| Finding Type          | Severity       | Description                                                                                                                                                                               | Action Required                                                                                                         |
+| --------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **FORENSIC_MATCH**    | 🔴 **CRITICAL** | High-confidence malware files (setup_bun.js, bun_environment.js, truffleSecrets.json, actionsSecrets.json, .github/workflows/discussion.yml) found with no content verification needed    | ⚠️ **SYSTEM COMPROMISED.** See emergency response steps below.                                                           |
+| **FORENSIC_ARTIFACT** | 🟠 **HIGH**     | Suspicious file detected (bundle.js, contents.json, cloud.json, environment.json) that matches malicious content signatures after deep inspection                                         | Investigate file origin. If legitimate (e.g., React Native contents.json), mark as safe. Otherwise, remove immediately. |
+| **WILDCARD_MATCH**    | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious.                                                                                                                       | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below.                                                               |
+| **CRITICAL_SCRIPT**   | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement.  |
+| **VERSION_MATCH**     | 🟠 **HIGH**     | Package name and version match the known infected list                                                                                                                                    | Uninstall package. Check lockfiles. Clear caches.                                                                       |
+| **LOCKFILE_HIT**      | 🟠 **HIGH**     | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install`                                                                                     | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate.                                                  |
+| **WILDCARD_LOCK_HIT** | 🟠 **HIGH**     | Lockfile contains a dependency that is known malware (any version).                                                                                                                       | Delete lockfile, remove dependency, regenerate with safe versions.                                                      |
+| **GHOST_PACKAGE**     | 🟡 **WARNING**  | Folder exists with a targeted name, but is empty/broken                                                                                                                                   | Investigate manually. Likely a failed install or cleanup artifact.                                                      |
+| **SCRIPT_WARNING**    | 🟡 **WARNING**  | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`)                        | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket.        |
+| **SAFE_MATCH**        | 🔵 **INFO**     | Package name matches a target, but the version is safe                                                                                                                                    | No action needed. Logged for audit purposes.                                                                            |
 
 > **Side Note for FORENSIC_MATCH:**
 > This finding can sometimes generate false positives (except setup_bun.js, bun_environment.js). Please verify if the found file is expected to be present (e.g., part of your own code or a legitimate tool). If unsure, investigate the file's origin and contents before taking action.
