@@ -902,7 +902,7 @@ async function fetchThreats(forceNoCache = false) {
           };
     }
 
-    const badPackages = {};
+    const badPackages = Object.create(null);
     let count = 0;
 
     // Process Source 1 (Wiz CSV)
@@ -1066,6 +1066,7 @@ function fetchWithCache(
           // Don't follow redirects automatically for security
           clearTimeout(timeout);
           settled = true;
+          res.destroy(); // release socket before settling
           console.log(
             `    > ${sourceName}: ${colors.yellow}Redirect detected, using fallback...${colors.reset}`,
           );
@@ -1185,7 +1186,7 @@ function parseCanisterWormCSV(data) {
   const versionIdx = headerCols.indexOf("version");
   if (nameIdx === -1 || versionIdx === -1) return {};
 
-  const result = {};
+  const result = Object.create(null);
   for (let i = 1; i < lines.length && i < 100000; i++) {
     const parts = lines[i].split(",");
 
@@ -1214,6 +1215,13 @@ function parseCanisterWormCSV(data) {
     const fullName = namespace ? `${namespace}/${name}` : name;
     if (fullName.length > 214) continue;
     if (version.length > 50) continue;
+    // Prototype-pollution guard: reject reserved JS keys (CWE-1321)
+    if (
+      fullName === "__proto__" ||
+      fullName === "constructor" ||
+      fullName === "prototype"
+    )
+      continue;
 
     if (!result[fullName]) result[fullName] = [];
     if (version && !result[fullName].includes(version)) {

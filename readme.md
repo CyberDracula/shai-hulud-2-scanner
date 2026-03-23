@@ -26,7 +26,7 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
 
 ## 🚀 Features
 
-* **Zero Dependencies:** Runs on standard Node.js (v14+). No 'npm install' required. Audit the code in 1 minute.
+* **Zero Dependencies:** Runs on standard Node.js (v12+). No 'npm install' required. Audit the code in 1 minute.
 * **Triple Threat Intelligence:** Automatically syncs with three IOC sources:
   * [Wiz Research](https://github.com/wiz-sec-public/wiz-research-iocs) - Official Shai-Hulud 2.0 packages (CSV)
   * [Hemachandsai Malicious Packages](https://github.com/hemachandsai/shai-hulud-malicious-packages) - Extended denylist (JSON)
