@@ -2057,6 +2057,7 @@ function checkVersionMatch(pkg, ver, badVersions, lockPath, type) {
  */
 function parseYarnLock(content, badPackages, campaignMap, lockPath) {
   const hits = [];
+  if (!content || typeof content !== "string") return hits;
   const lines = content.split("\n");
   let currentPkg = null;
 
@@ -2295,6 +2296,7 @@ async function uploadReport(csvContent, userInfo) {
     criticalCount: detectedIssues.filter((i) =>
       [
         "FORENSIC_MATCH",
+        "FORENSIC_ARTIFACT",
         "CRITICAL_SCRIPT",
         "VERSION_MATCH",
         "WILDCARD_MATCH",
@@ -2636,6 +2638,7 @@ if (require.main === module) {
     if (failOnEqArg || failOnIdx !== -1) {
       const criticalTypes = [
         "FORENSIC_MATCH",
+        "FORENSIC_ARTIFACT",
         "CRITICAL_SCRIPT",
         "VERSION_MATCH",
         "WILDCARD_MATCH",

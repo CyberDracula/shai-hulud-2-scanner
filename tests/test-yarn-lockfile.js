@@ -282,6 +282,25 @@ test("Berry-format scoped package with quoted header — LOCKFILE_HIT", () => {
   );
 });
 
+test("non-string input — no hits, no errors", () => {
+  const bad = { "evil-pkg": new Set(["1.0.0"]) };
+  assertEqual(
+    parseYarnLock(null, bad, new Map(), LOCK_PATH).length,
+    0,
+    "null → []",
+  );
+  assertEqual(
+    parseYarnLock(undefined, bad, new Map(), LOCK_PATH).length,
+    0,
+    "undefined → []",
+  );
+  assertEqual(
+    parseYarnLock(42, bad, new Map(), LOCK_PATH).length,
+    0,
+    "number → []",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

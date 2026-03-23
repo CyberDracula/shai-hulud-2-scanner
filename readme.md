@@ -121,7 +121,7 @@ Control when the scanner fails builds based on finding severity. By default, the
 
 **Modes:**
 
-* `--fail-on=critical`: Exit code 1 only on **CRITICAL** findings (FORENSIC_MATCH, CRITICAL_SCRIPT, VERSION_MATCH, WILDCARD_MATCH, LOCKFILE_HIT, WILDCARD_LOCK_HIT)
+* `--fail-on=critical`: Exit code 1 only on **CRITICAL** findings (FORENSIC_MATCH, FORENSIC_ARTIFACT, CRITICAL_SCRIPT, VERSION_MATCH, WILDCARD_MATCH, LOCKFILE_HIT, WILDCARD_LOCK_HIT)
 * `--fail-on=warning`: Exit code 1 on **CRITICAL or WARNING** findings (includes SCRIPT_WARNING, GHOST_PACKAGE, CORRUPT_PACKAGE)
 * `--fail-on=off`: Always exit code 0 (report only, never fail builds)
 
