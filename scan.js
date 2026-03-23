@@ -1050,7 +1050,8 @@ function fetchWithCache(
         },
       },
       (res) => {
-        clearTimeout(timeout);
+        // Do NOT clearTimeout here — headers just arrived.
+        // Keep the timer alive so a stall mid-transfer is still caught.
         if (settled) {
           res.destroy();
           return;
@@ -1063,6 +1064,7 @@ function fetchWithCache(
           res.headers.location
         ) {
           // Don't follow redirects automatically for security
+          clearTimeout(timeout);
           settled = true;
           console.log(
             `    > ${sourceName}: ${colors.yellow}Redirect detected, using fallback...${colors.reset}`,
@@ -1083,6 +1085,7 @@ function fetchWithCache(
           }
           receivedBytes += chunk.length;
           if (receivedBytes > maxBytes) {
+            clearTimeout(timeout);
             settled = true;
             res.destroy();
             reject(new Error("Response too large"));
@@ -1093,6 +1096,7 @@ function fetchWithCache(
 
         res.on("end", () => {
           if (settled) return;
+          clearTimeout(timeout); // Full body received — safe to cancel timer now
           settled = true;
           if (res.statusCode >= 200 && res.statusCode < 300) {
             console.log(

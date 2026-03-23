@@ -25,14 +25,28 @@ const FALLBACK_CANISTERWORM_FILE = path.join(
   "canisterworm-packages.csv",
 );
 
-const colors = {
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  red: "\x1b[31m",
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-};
+const supportsColor =
+  process.stdout.isTTY &&
+  process.env.FORCE_COLOR !== "0" &&
+  process.env.NO_COLOR === undefined;
+
+const colors = supportsColor
+  ? {
+      green: "\x1b[32m",
+      yellow: "\x1b[33m",
+      cyan: "\x1b[36m",
+      red: "\x1b[31m",
+      reset: "\x1b[0m",
+      bold: "\x1b[1m",
+    }
+  : {
+      green: "",
+      yellow: "",
+      cyan: "",
+      red: "",
+      reset: "",
+      bold: "",
+    };
 
 // Ensure fallback directory exists
 function ensureDir(dir) {
@@ -78,7 +92,20 @@ function downloadFile(url, destination, name) {
         }
 
         let data = "";
-        res.on("data", (chunk) => (data += chunk));
+        let receivedBytes = 0;
+        const maxBytes = 10 * 1024 * 1024; // 10 MB cap
+        res.on("data", (chunk) => {
+          if (settled) return;
+          receivedBytes += chunk.length;
+          if (receivedBytes > maxBytes) {
+            settled = true;
+            clearTimeout(timeout);
+            res.destroy();
+            reject(new Error(`Response too large for ${name}`));
+            return;
+          }
+          data += chunk;
+        });
         res.on("end", () => {
           if (settled) return;
           settled = true;
