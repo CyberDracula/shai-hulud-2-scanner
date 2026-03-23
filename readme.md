@@ -196,7 +196,7 @@ Running `node update-fallbacks.js` automatically updates the Wiz and Hemachandsa
 
 ## Interpreting the Report (shai-hulud-report.csv)
 
-The tool categorizes findings into different severity levels. Understanding what each means is critical for proper response.
+The CSV report includes one row per finding. Each row contains the severity level, the specific finding type, and a **`Campaign`** column that identifies the malware campaign the IOC belongs to (e.g. `SHAI_HULUD_2`, `CANISTERWORM`, or empty when unknown). Use the Campaign column to filter or group findings by campaign in spreadsheets, SIEMs, or other analysis tools.
 
 | Finding Type          | Severity       | Description                                                                                                                                                                               | Action Required                                                                                                         |
 | --------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |

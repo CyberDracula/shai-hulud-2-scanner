@@ -60,7 +60,8 @@ function downloadFile(url, destination, name) {
 
     req = https
       .get(url, (res) => {
-        clearTimeout(timeout);
+        // Do NOT clear the timeout here (headers just arrived).
+        // Keep it alive so a stall mid-transfer is still caught.
         if (settled) {
           res.destroy();
           return;
@@ -69,6 +70,8 @@ function downloadFile(url, destination, name) {
         if (res.statusCode !== 200) {
           if (!settled) {
             settled = true;
+            clearTimeout(timeout);
+            res.destroy();
             reject(new Error(`HTTP ${res.statusCode} for ${name}`));
           }
           return;
@@ -79,6 +82,7 @@ function downloadFile(url, destination, name) {
         res.on("end", () => {
           if (settled) return;
           settled = true;
+          clearTimeout(timeout); // Full body received — safe to cancel timer now
           try {
             fs.writeFileSync(destination, data, "utf8");
             const size = (Buffer.byteLength(data) / 1024).toFixed(2);

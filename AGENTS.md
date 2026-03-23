@@ -6,9 +6,9 @@ This file provides guidance for AI coding agents (GitHub Copilot, Codex, etc.) w
 
 ## Project Overview
 
-**shai-hulud-2-scanner** is a forensic auditing tool that detects compromised npm packages from the Shai-Hulud 1.0/2.0 supply chain attack. It scans local npm/Yarn/pnpm caches, global installations, NVM environments, and project directories against live threat intelligence (IOC) feeds from Wiz Research and Hemachandsai.
+**shai-hulud-2-scanner** is a forensic auditing tool that detects compromised npm packages from the Shai-Hulud 1.0/2.0 supply chain attack and the March 2026 CanisterWorm/TeamPCP campaign. It scans local npm/Yarn/pnpm caches, global installations, NVM environments, and project directories against live threat intelligence (IOC) feeds from Wiz Research, Hemachandsai, and Socket.dev (CanisterWorm).
 
-- **Version:** 2.1.0
+- **Version:** 2.2.0
 - **Runtime:** Node.js ≥ 12.0.0 (no npm install required)
 - **Zero Dependencies:** The tool ships with zero runtime dependencies — `require()` only Node.js built-ins (`fs`, `path`, `https`, `os`, `crypto`, `child_process`).
 - **Entry point:** `scan.js` (also the CLI binary)
@@ -28,11 +28,14 @@ run-scanner.bat             # Windows convenience launcher
 run-scanner.sh              # Unix/macOS convenience launcher
 shai-hulud-report.csv       # Sample/output CSV report
 fallback/
-  wiz-iocs.csv              # Offline copy of Wiz Research IOC list
-  malicious-packages.json   # Offline copy of Hemachandsai malicious package list
-  README.md                 # Explains fallback data purpose
+  wiz-iocs.csv                  # Offline copy of Wiz Research IOC list
+  malicious-packages.json       # Offline copy of Hemachandsai malicious package list
+  canisterworm-packages.csv     # Offline copy of CanisterWorm / TeamPCP IOC list (manual update)
+  README.md                     # Explains fallback data purpose
 tests/
   test-csv-parser.js        # Self-contained test for parseWizCSV()
+  test-yarn-lockfile.js     # Self-contained test for parseYarnLock()
+  test-canisterworm-csv.js  # Self-contained test for parseCanisterWormCSV()
 ```
 
 ---
@@ -69,6 +72,8 @@ node update-fallbacks.js
 
 ```bash
 node tests/test-csv-parser.js
+node tests/test-yarn-lockfile.js
+node tests/test-canisterworm-csv.js
 ```
 
 There is no test framework dependency — tests use a hand-rolled assertion helper and output pass/fail to stdout. Exit code is non-zero on any failure.

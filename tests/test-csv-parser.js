@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+"use strict";
 /**
  * Test Suite for parseWizCSV Function
  * Tests multi-version CSV parsing capabilities
