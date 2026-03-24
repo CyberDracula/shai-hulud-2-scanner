@@ -1214,7 +1214,15 @@ function parseCanisterWormCSV(data) {
     if (!name || name.length > 214) continue;
     const fullName = namespace ? `${namespace}/${name}` : name;
     if (fullName.length > 214) continue;
+    // Validate npm package name format (mirrors parseWizCSV validation)
+    if (
+      !/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(fullName)
+    )
+      continue;
     if (version.length > 50) continue;
+    // Skip rows with missing/empty version — an empty array would silently
+    // become a wildcard "*" in fetchThreats() and cause false-positive matches.
+    if (!version) continue;
     // Prototype-pollution guard: reject reserved JS keys (CWE-1321)
     if (
       fullName === "__proto__" ||
@@ -1224,7 +1232,7 @@ function parseCanisterWormCSV(data) {
       continue;
 
     if (!result[fullName]) result[fullName] = [];
-    if (version && !result[fullName].includes(version)) {
+    if (!result[fullName].includes(version)) {
       result[fullName].push(version);
     }
   }
@@ -1650,7 +1658,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
             type: "GHOST_PACKAGE",
             package: pkgName,
             version: "UNKNOWN",
-            location: pkgPath,
+            location: validatedPkgPath,
             details:
               "Targeted package folder exists but package.json is missing",
             campaign: campaignMap.get(pkgName) || "",
@@ -1660,7 +1668,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
             type: "CORRUPT_PACKAGE",
             package: pkgName,
             version: "UNKNOWN",
-            location: pkgPath,
+            location: validatedPkgPath,
             details: `package.json ${error}`,
             campaign: campaignMap.get(pkgName) || "",
           });
@@ -1684,7 +1692,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         type: "CORRUPT_PACKAGE",
         package: pkgName,
         version: "UNKNOWN",
-        location: pkgPath,
+        location: validatedPkgPath,
         details: "Missing or invalid version field",
         campaign: campaignMap.get(pkgName) || "",
       });
@@ -1703,7 +1711,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         type: matchType,
         package: pkgName,
         version: version,
-        location: pkgPath,
+        location: validatedPkgPath,
         campaign: campaignMap.get(pkgName) || "",
       });
     } else {
@@ -1711,7 +1719,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         type: "SAFE_MATCH",
         package: pkgName,
         version: version,
-        location: pkgPath,
+        location: validatedPkgPath,
         campaign: campaignMap.get(pkgName) || "",
       });
     }
@@ -1721,7 +1729,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
         type: "CORRUPT_PACKAGE",
         package: pkgName,
         version: "UNKNOWN",
-        location: pkgPath,
+        location: validatedPkgPath,
         details: `package.json parse error: ${e.message}`,
         campaign: campaignMap.get(pkgName) || "",
       });

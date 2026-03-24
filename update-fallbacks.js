@@ -111,14 +111,25 @@ function downloadFile(url, destination, name) {
           if (settled) return;
           settled = true;
           clearTimeout(timeout); // Full body received — safe to cancel timer now
+          const destDir = path.dirname(destination);
+          const tempPath = path.join(
+            destDir,
+            `.${path.basename(destination)}.tmp-${process.pid}-${Date.now()}`,
+          );
           try {
-            fs.writeFileSync(destination, data, "utf8");
+            // Write to a temp file first, then atomically rename into place (CWE-367).
+            fs.writeFileSync(tempPath, data, "utf8");
+            fs.renameSync(tempPath, destination);
             const size = (Buffer.byteLength(data) / 1024).toFixed(2);
             console.log(
               `${colors.green}✓ ${name} updated (${size} KB)${colors.reset}`,
             );
             resolve();
           } catch (e) {
+            // Best-effort cleanup of any temp file left behind.
+            try {
+              if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+            } catch (_) {}
             reject(e);
           }
         });
