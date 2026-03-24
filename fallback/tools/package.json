@@ -1,0 +1,16 @@
+{
+    "name": "shai-hulud-canisterworm-fetcher",
+    "version": "1.0.0",
+    "description": "Playwright-based fetcher for the CanisterWorm IOC CSV — isolated from the main scanner project.",
+    "private": true,
+    "scripts": {
+        "fetch": "node fetch-canisterworm.js",
+        "fetch:headed": "node fetch-canisterworm.js --headed"
+    },
+    "dependencies": {
+        "playwright": "^1.52.0"
+    },
+    "engines": {
+        "node": ">=12.0.0"
+    }
+}

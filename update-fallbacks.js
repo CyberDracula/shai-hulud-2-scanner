@@ -226,12 +226,18 @@ function getFileInfo(filePath) {
     failCount++;
   }
 
-  // CanisterWorm IOC list must be updated manually
+  // CanisterWorm IOC list — automated via Playwright fetcher or manual download
   console.log(
-    `${colors.yellow}ℹ  CanisterWorm IOCs (canisterworm-packages.csv) must be updated manually:${colors.reset}`,
+    `${colors.yellow}ℹ  CanisterWorm IOCs (canisterworm-packages.csv) require a browser to update:${colors.reset}`,
   );
   console.log(
-    `   • Download the CSV from: ${colors.cyan}https://socket.dev/supply-chain-attacks/canisterworm${colors.reset}`,
+    `   • Automated: ${colors.cyan}node fallback/tools/fetch-canisterworm.js${colors.reset}`,
+  );
+  console.log(
+    `     (setup once: cd fallback && npm install && npx playwright install chromium)`,
+  );
+  console.log(
+    `   • Manual:    download from ${colors.cyan}https://socket.dev/supply-chain-attacks/canisterworm${colors.reset}`,
   );
   console.log(
     `   • Or pull the latest release of this repository (the bundled CSV is kept updated on each release).`,
