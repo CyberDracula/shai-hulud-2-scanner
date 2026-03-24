@@ -168,6 +168,24 @@ test("multiple distinct versions for the same package", () => {
   );
 });
 
+test("parser output preserves all versions when converted to scanner denylist Set", () => {
+  const csv = cwCSV([
+    "npm,@scope,multi-ver,1.8.14,2026-01-01,2026-01-01",
+    "npm,@scope,multi-ver,1.8.15,2026-01-02,2026-01-02",
+    "npm,@scope,multi-ver,1.8.16,2026-01-03,2026-01-03",
+    // Duplicate row should not remove or alter coverage
+    "npm,@scope,multi-ver,1.8.15,2026-01-04,2026-01-04",
+  ]);
+
+  const parsed = parseCanisterWormCSV(csv);
+  const denylistSet = new Set(parsed["@scope/multi-ver"] || []);
+
+  assert(denylistSet.has("1.8.14"), "matches first listed version");
+  assert(denylistSet.has("1.8.15"), "matches middle listed version");
+  assert(denylistSet.has("1.8.16"), "matches last listed version");
+  assertEqual(denylistSet.size, 3, "dedupe keeps all unique versions");
+});
+
 test("name longer than 214 chars — row skipped", () => {
   const longName = "a".repeat(215);
   const csv = cwCSV([`npm,,${longName},1.0.0,2026-01-01,2026-01-01`]);

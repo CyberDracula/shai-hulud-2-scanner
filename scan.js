@@ -66,7 +66,7 @@ const CONFIG = Object.freeze({
   MAX_PACKAGES_SCANNED: 50000,
 
   // Scanner identity
-  VERSION: "2.2.0",
+  VERSION: "2.3.0",
 });
 
 // Derived cache paths
@@ -687,7 +687,7 @@ function getUserInfo() {
     hostname: os.hostname(),
     platform: os.platform(),
     nodeVersion: process.version,
-    scannerVersion: "2.2.0",
+    scannerVersion: CONFIG.VERSION,
   };
 
   try {
@@ -1483,6 +1483,8 @@ function scanDir(
       entry.isFile() &&
       (entry.name === "package-lock.json" ||
         entry.name === "yarn.lock" ||
+        entry.name === "pnpm-lock.yaml" ||
+        entry.name === "bun.lock" ||
         entry.name === "npm-shrinkwrap.json")
     ) {
       checkLockfile(fullPath, badPackages);
@@ -1543,7 +1545,13 @@ function scanNodeModules(modulesPath, badPackages) {
 }
 
 function checkPackageLockfiles(pkgPath, badPackages) {
-  const lockFiles = ["package-lock.json", "yarn.lock", "npm-shrinkwrap.json"];
+  const lockFiles = [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "npm-shrinkwrap.json",
+  ];
   for (const lockFile of lockFiles) {
     const lockPath = path.join(pkgPath, lockFile);
     try {
@@ -1556,6 +1564,26 @@ function checkPackageLockfiles(pkgPath, badPackages) {
       // File doesn't exist or can't be accessed - skip silently
     }
   }
+}
+
+function resolveEffectivePackageName(fallbackPkgName, packageJson) {
+  if (!packageJson || typeof packageJson !== "object") {
+    return fallbackPkgName;
+  }
+
+  const packageJsonName =
+    typeof packageJson.name === "string" ? packageJson.name.trim() : "";
+  if (
+    packageJsonName &&
+    packageJsonName.length <= 214 &&
+    /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(
+      packageJsonName,
+    )
+  ) {
+    return packageJsonName;
+  }
+
+  return fallbackPkgName;
 }
 
 // ============================================================================
@@ -1641,6 +1669,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
   // 2. GHOST CHECK & 3. METADATA CHECK & HEURISTIC CHECK
   let packageJson;
+  let effectivePkgName = pkgName;
   try {
     const { content, error } = safeReadFile(
       pJsonPath,
@@ -1679,59 +1708,63 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
     packageJson = JSON.parse(content);
 
+    // Preserve npm scope (@scope/name) from package metadata to avoid
+    // basename-based false positives when wildcard matching versions.
+    effectivePkgName = resolveEffectivePackageName(pkgName, packageJson);
+
     // A. HEURISTIC SCRIPT CHECK (Run on everything)
-    checkScripts(packageJson, pkgName, validatedPkgPath);
+    checkScripts(packageJson, effectivePkgName, validatedPkgPath);
 
     // B. TARGET CHECK
-    if (!badPackages[pkgName]) return;
+    if (!badPackages[effectivePkgName]) return;
 
     // C. VERSION CHECK
     const version = packageJson.version;
     if (!version || typeof version !== "string") {
       detectedIssues.push({
         type: "CORRUPT_PACKAGE",
-        package: pkgName,
+        package: effectivePkgName,
         version: "UNKNOWN",
         location: validatedPkgPath,
         details: "Missing or invalid version field",
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
       return;
     }
 
-    const targetVersions = badPackages[pkgName];
+    const targetVersions = badPackages[effectivePkgName];
 
     const hasWildcard = targetVersions.has("*");
     if (hasWildcard || targetVersions.has(version)) {
       const matchType = hasWildcard ? "WILDCARD_MATCH" : "VERSION_MATCH";
       console.log(
-        `${colors.red}    [!] ALERT: ${sanitizeForLog(pkgName)}@${sanitizeForLog(version)} matches denylist (${matchType})${colors.reset}`,
+        `${colors.red}    [!] ALERT: ${sanitizeForLog(effectivePkgName)}@${sanitizeForLog(version)} matches denylist (${matchType})${colors.reset}`,
       );
       detectedIssues.push({
         type: matchType,
-        package: pkgName,
+        package: effectivePkgName,
         version: version,
         location: validatedPkgPath,
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
     } else {
       detectedIssues.push({
         type: "SAFE_MATCH",
-        package: pkgName,
+        package: effectivePkgName,
         version: version,
         location: validatedPkgPath,
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
     }
   } catch (e) {
-    if (badPackages[pkgName]) {
+    if (badPackages[effectivePkgName]) {
       detectedIssues.push({
         type: "CORRUPT_PACKAGE",
-        package: pkgName,
+        package: effectivePkgName,
         version: "UNKNOWN",
         location: validatedPkgPath,
         details: `package.json parse error: ${e.message}`,
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
     }
   }
@@ -2123,6 +2156,440 @@ function parseYarnLock(content, badPackages, campaignMap, lockPath) {
   return hits;
 }
 
+/**
+ * Parse package-lock.json / npm-shrinkwrap.json and return denylist hits.
+ * Exported for unit-testing.
+ *
+ * @param {string} content     - Raw lockfile text
+ * @param {Object} badPackages - Map of pkg name -> Set of bad versions ("*" = any)
+ * @param {Map}    campaignMap - Map of pkg name -> campaign string
+ * @param {string} lockPath    - Path for issue location field
+ * @returns {Array} Array of hit objects
+ */
+function parseNpmLock(content, badPackages, campaignMap, lockPath) {
+  const hits = [];
+  if (!content || typeof content !== "string") return hits;
+
+  let json;
+  try {
+    json = JSON.parse(content);
+  } catch (e) {
+    return hits;
+  }
+
+  const addHit = (pkg, ver, badVersions, type) => {
+    if (!ver || typeof ver !== "string") return;
+    const cleanVer = ver.slice(0, 50);
+
+    if (badVersions.has(cleanVer)) {
+      hits.push({
+        type: "LOCKFILE_HIT",
+        package: pkg,
+        version: cleanVer,
+        location: lockPath,
+        details: `Exact match in ${type}`,
+        campaign: campaignMap.get(pkg) || "",
+      });
+    } else if (badVersions.has("*")) {
+      hits.push({
+        type: "WILDCARD_LOCK_HIT",
+        package: pkg,
+        version: cleanVer,
+        location: lockPath,
+        details: `Wildcard match in ${type}`,
+        campaign: campaignMap.get(pkg) || "",
+      });
+    }
+  };
+
+  const walkDependencies = (deps, depth = 0) => {
+    if (!deps || typeof deps !== "object" || depth > 100) return;
+
+    for (const [pkg, details] of Object.entries(deps)) {
+      if (badPackages[pkg] && details && details.version) {
+        addHit(pkg, details.version, badPackages[pkg], "NPM_LOCK_V1");
+      }
+      if (
+        details &&
+        details.dependencies &&
+        typeof details.dependencies === "object"
+      ) {
+        walkDependencies(details.dependencies, depth + 1);
+      }
+    }
+  };
+
+  // npm lockfile v2/v3
+  if (json.packages && typeof json.packages === "object") {
+    for (const [key, details] of Object.entries(json.packages)) {
+      let pkgName = key;
+      const nmIndex = key.lastIndexOf("node_modules/");
+      if (nmIndex !== -1) {
+        pkgName = key.slice(nmIndex + "node_modules/".length);
+      }
+      if (pkgName && badPackages[pkgName] && details && details.version) {
+        addHit(pkgName, details.version, badPackages[pkgName], "NPM_LOCK_V3");
+      }
+    }
+  }
+
+  // npm lockfile v1
+  if (json.dependencies && typeof json.dependencies === "object") {
+    walkDependencies(json.dependencies, 0);
+  }
+
+  return hits;
+}
+
+/**
+ * Parse pnpm-lock.yaml and return denylist hits.
+ * Exported for unit-testing.
+ *
+ * Supports modern pnpm keys (e.g. "pkg@1.2.3", "@scope/pkg@1.2.3") and
+ * legacy keys with a leading slash (e.g. "/pkg@1.2.3").
+ *
+ * @param {string} content     - Raw lockfile text
+ * @param {Object} badPackages - Map of pkg name -> Set of bad versions ("*" = any)
+ * @param {Map}    campaignMap - Map of pkg name -> campaign string
+ * @param {string} lockPath    - Path for issue location field
+ * @returns {Array} Array of hit objects
+ */
+function parsePnpmLock(content, badPackages, campaignMap, lockPath) {
+  const hits = [];
+  if (!content || typeof content !== "string") return hits;
+
+  const lines = content.split("\n");
+  let currentSection = "";
+  let inImporterDependencyBlock = false;
+  let currentImporterPackage = "";
+  const seenHitKeys = new Set();
+
+  const addHit = (pkg, ver, badVersions) => {
+    if (!ver || typeof ver !== "string") return;
+    const cleanVer = ver.slice(0, 50);
+
+    let issueType = "";
+    if (badVersions.has(cleanVer)) {
+      issueType = "LOCKFILE_HIT";
+    } else if (badVersions.has("*")) {
+      issueType = "WILDCARD_LOCK_HIT";
+    } else {
+      return;
+    }
+
+    const hitKey = `${issueType}|${pkg}|${cleanVer}`;
+    if (seenHitKeys.has(hitKey)) return;
+    seenHitKeys.add(hitKey);
+
+    if (issueType === "LOCKFILE_HIT") {
+      hits.push({
+        type: issueType,
+        package: pkg,
+        version: cleanVer,
+        location: lockPath,
+        details: "Exact match in PNPM_LOCK",
+        campaign: campaignMap.get(pkg) || "",
+      });
+    } else {
+      hits.push({
+        type: issueType,
+        package: pkg,
+        version: cleanVer,
+        location: lockPath,
+        details: "Wildcard match in PNPM_LOCK",
+        campaign: campaignMap.get(pkg) || "",
+      });
+    }
+  };
+
+  const packageNamePattern =
+    /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // Top-level YAML section markers (e.g. packages:, snapshots:, importers:)
+    if (
+      !line.startsWith(" ") &&
+      /^[A-Za-z][A-Za-z0-9_-]{0,40}:$/.test(trimmed)
+    ) {
+      currentSection = trimmed.slice(0, -1);
+      inImporterDependencyBlock = false;
+      currentImporterPackage = "";
+      continue;
+    }
+
+    // importers.<name>.(dependencies|devDependencies|optionalDependencies).
+    // <pkg>.version path, used by pnpm lockfile v9 top section.
+    if (currentSection === "importers") {
+      if (
+        /^\s{4}(?:dependencies|devDependencies|optionalDependencies):$/.test(
+          line,
+        )
+      ) {
+        inImporterDependencyBlock = true;
+        currentImporterPackage = "";
+        continue;
+      }
+
+      if (/^\s{4}[A-Za-z][A-Za-z0-9_-]{0,40}:$/.test(line)) {
+        inImporterDependencyBlock = false;
+        currentImporterPackage = "";
+        continue;
+      }
+
+      if (inImporterDependencyBlock) {
+        const importerPkgMatch = line.match(
+          /^\s{6}(['"]?[^:'"]{1,214}['"]?):$/,
+        );
+        if (importerPkgMatch) {
+          let pkgName = importerPkgMatch[1].trim();
+          if (
+            (pkgName.startsWith('"') && pkgName.endsWith('"')) ||
+            (pkgName.startsWith("'") && pkgName.endsWith("'"))
+          ) {
+            pkgName = pkgName.slice(1, -1);
+          }
+
+          currentImporterPackage = packageNamePattern.test(pkgName)
+            ? pkgName
+            : "";
+          continue;
+        }
+
+        const importerVersionMatch = line.match(
+          /^\s{8}version:\s+([^\s#]{1,200})/,
+        );
+        if (importerVersionMatch && currentImporterPackage) {
+          const version = importerVersionMatch[1].split("(")[0];
+          if (badPackages[currentImporterPackage]) {
+            addHit(
+              currentImporterPackage,
+              version,
+              badPackages[currentImporterPackage],
+            );
+          }
+          continue;
+        }
+      }
+    }
+
+    if (currentSection !== "packages" && currentSection !== "snapshots") {
+      continue;
+    }
+
+    // package keys are direct children under section with 2-space indentation.
+    if (
+      !line.startsWith("  ") ||
+      line.startsWith("    ") ||
+      !trimmed.endsWith(":")
+    ) {
+      continue;
+    }
+
+    let key = trimmed.slice(0, -1).trim();
+    if (
+      (key.startsWith('"') && key.endsWith('"')) ||
+      (key.startsWith("'") && key.endsWith("'"))
+    ) {
+      key = key.slice(1, -1);
+    }
+
+    if (!key || key.length > 400) continue;
+    if (key.startsWith("/")) key = key.slice(1);
+
+    const peerSuffixIndex = key.indexOf("(");
+    const versionSplitSource =
+      peerSuffixIndex >= 0 ? key.slice(0, peerSuffixIndex) : key;
+    const atIndex = versionSplitSource.lastIndexOf("@");
+    if (atIndex <= 0 || atIndex >= key.length - 1) continue;
+
+    const pkgName = key.slice(0, atIndex);
+    const rawVersion = key.slice(atIndex + 1);
+    const version = rawVersion.split("(")[0];
+
+    if (
+      pkgName.length > 214 ||
+      version.length > 100 ||
+      !packageNamePattern.test(pkgName)
+    ) {
+      continue;
+    }
+
+    if (badPackages[pkgName]) {
+      addHit(pkgName, version, badPackages[pkgName]);
+    }
+  }
+
+  return hits;
+}
+
+/**
+ * Parse bun.lock and return denylist hits.
+ * Exported for unit-testing.
+ *
+ * Parser strategy:
+ * - JSON mode for textual bun.lock variants
+ * - Token scan fallback for textual and binary-ish content
+ *
+ * @param {string} content     - Raw lockfile text
+ * @param {Object} badPackages - Map of pkg name -> Set of bad versions ("*" = any)
+ * @param {Map}    campaignMap - Map of pkg name -> campaign string
+ * @param {string} lockPath    - Path for issue location field
+ * @returns {Array} Array of hit objects
+ */
+function parseBunLock(content, badPackages, campaignMap, lockPath) {
+  const hits = [];
+  if (!content || typeof content !== "string") return hits;
+
+  const seenHitKeys = new Set();
+  const packageNamePattern =
+    /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+
+  const addHit = (pkg, ver, badVersions, source = "BUN_LOCK") => {
+    if (!pkg || !ver || typeof ver !== "string") return;
+    const cleanVer = ver.slice(0, 50);
+
+    let issueType = "";
+    if (badVersions.has(cleanVer)) {
+      issueType = "LOCKFILE_HIT";
+    } else if (badVersions.has("*")) {
+      issueType = "WILDCARD_LOCK_HIT";
+    } else {
+      return;
+    }
+
+    const dedupeKey = `${issueType}|${pkg}|${cleanVer}`;
+    if (seenHitKeys.has(dedupeKey)) return;
+    seenHitKeys.add(dedupeKey);
+
+    hits.push({
+      type: issueType,
+      package: pkg,
+      version: cleanVer,
+      location: lockPath,
+      details:
+        issueType === "LOCKFILE_HIT"
+          ? `Exact match in ${source}`
+          : `Wildcard match in ${source}`,
+      campaign: campaignMap.get(pkg) || "",
+    });
+  };
+
+  const parseSpecifier = (rawSpecifier) => {
+    if (!rawSpecifier || typeof rawSpecifier !== "string") return null;
+
+    let spec = rawSpecifier.trim();
+    if (
+      (spec.startsWith('"') && spec.endsWith('"')) ||
+      (spec.startsWith("'") && spec.endsWith("'"))
+    ) {
+      spec = spec.slice(1, -1);
+    }
+    if (spec.startsWith("/")) spec = spec.slice(1);
+
+    // Remove common Bun/npm protocol prefixes on the version side.
+    spec = spec.replace(/@(?:npm|patch|workspace):/g, "@");
+
+    const peerSuffixIndex = spec.indexOf("(");
+    const versionSplitSource =
+      peerSuffixIndex >= 0 ? spec.slice(0, peerSuffixIndex) : spec;
+    const atIndex = versionSplitSource.lastIndexOf("@");
+    if (atIndex <= 0 || atIndex >= spec.length - 1) return null;
+
+    const pkgName = spec.slice(0, atIndex);
+    const rawVersion = spec.slice(atIndex + 1);
+    const version = rawVersion.split("(")[0].trim();
+
+    // Ignore non-resolved versions/specifiers (e.g. workspace:*).
+    if (
+      !version ||
+      version === "*" ||
+      version.startsWith("workspace:") ||
+      version.startsWith("file:") ||
+      version.startsWith("link:") ||
+      version.startsWith("portal:") ||
+      version.startsWith("github:") ||
+      version.startsWith("git+") ||
+      (!/^[0-9]/.test(version) && !/^v[0-9]/.test(version))
+    ) {
+      return null;
+    }
+
+    if (
+      pkgName.length > 214 ||
+      version.length > 100 ||
+      !packageNamePattern.test(pkgName)
+    ) {
+      return null;
+    }
+
+    return { pkgName, version };
+  };
+
+  // 1) JSON mode for textual bun lockfiles.
+  try {
+    const json = JSON.parse(content);
+    if (json && typeof json === "object") {
+      if (json.packages && typeof json.packages === "object") {
+        for (const [key, value] of Object.entries(json.packages)) {
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const version =
+              typeof value.version === "string" ? value.version : null;
+            if (version && badPackages[key] && packageNamePattern.test(key)) {
+              addHit(
+                key,
+                version.split("(")[0],
+                badPackages[key],
+                "BUN_LOCK_JSON",
+              );
+            }
+          }
+
+          if (Array.isArray(value) && value.length > 0) {
+            const parsed = parseSpecifier(value[0]);
+            if (parsed && badPackages[parsed.pkgName]) {
+              addHit(
+                parsed.pkgName,
+                parsed.version,
+                badPackages[parsed.pkgName],
+                "BUN_LOCK_JSON",
+              );
+            }
+          }
+
+          const parsedKey = parseSpecifier(key);
+          if (parsedKey && badPackages[parsedKey.pkgName]) {
+            addHit(
+              parsedKey.pkgName,
+              parsedKey.version,
+              badPackages[parsedKey.pkgName],
+              "BUN_LOCK_JSON",
+            );
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Non-JSON bun lockfiles are handled by token scan below.
+  }
+
+  // 2) Token scan fallback (works for text and binary-ish content).
+  const tokenRegex =
+    /(@[a-z0-9-~][a-z0-9-._~]*\/[a-z0-9-~][a-z0-9-._~]*|[a-z0-9-~][a-z0-9-._~]*)@([0-9][0-9A-Za-z+._-]{0,49})(?:\([^\s)]{0,100}\))?/g;
+  let match;
+  while ((match = tokenRegex.exec(content)) !== null) {
+    const pkgName = match[1];
+    const version = match[2];
+    if (badPackages[pkgName]) {
+      addHit(pkgName, version, badPackages[pkgName], "BUN_LOCK_SCAN");
+    }
+  }
+
+  return hits;
+}
+
 function checkLockfile(lockPath, badPackages) {
   if (isShuttingDown) return;
 
@@ -2145,39 +2612,61 @@ function checkLockfile(lockPath, badPackages) {
 
   // --- 1. NPM Lockfile ---
   if (fileName === "package-lock.json" || fileName === "npm-shrinkwrap.json") {
-    try {
-      const json = JSON.parse(content);
-
-      // Check v2/v3 "packages" section
-      if (json.packages && typeof json.packages === "object") {
-        for (const [key, details] of Object.entries(json.packages)) {
-          const pkgName = key.replace(/^.*node_modules\//, "");
-
-          if (pkgName && badPackages[pkgName] && details && details.version) {
-            checkVersionMatch(
-              pkgName,
-              details.version,
-              badPackages[pkgName],
-              lockPath,
-              "NPM_LOCK_V3",
-            );
-          }
-        }
-      }
-
-      // Check v1 "dependencies" section
-      if (json.dependencies && typeof json.dependencies === "object") {
-        checkDependenciesRecursive(json.dependencies, badPackages, lockPath);
-      }
-    } catch (e) {
-      // Silently ignore parse errors for lockfiles (common with partial writes)
-    }
+    const hits = parseNpmLock(content, badPackages, campaignMap, lockPath);
+    hits.forEach((h) => detectedIssues.push(h));
   }
 
   // --- 2. Yarn Lockfile ---
   else if (fileName === "yarn.lock") {
     const hits = parseYarnLock(content, badPackages, campaignMap, lockPath);
     hits.forEach((h) => detectedIssues.push(h));
+  }
+
+  // --- 3. PNPM Lockfile ---
+  else if (fileName === "pnpm-lock.yaml") {
+    const hits = parsePnpmLock(content, badPackages, campaignMap, lockPath);
+    hits.forEach((h) => detectedIssues.push(h));
+  }
+
+  // --- 4. Bun Lockfile ---
+  else if (fileName === "bun.lock") {
+    const hits = parseBunLock(content, badPackages, campaignMap, lockPath);
+    hits.forEach((h) => detectedIssues.push(h));
+  }
+}
+
+/**
+ * Test helper: execute the real checkLockfile() and return only new hits.
+ * Keeps module-global state isolated so tests do not leak across runs.
+ *
+ * @param {string} lockPath - Absolute path to lockfile on disk
+ * @param {Object} badPackages - Map of pkg name -> Set of bad versions
+ * @param {Map} [campaignOverrides] - Optional campaign map to apply for this call
+ * @returns {Array} Hits generated by this single checkLockfile execution
+ */
+function runCheckLockfileForTest(lockPath, badPackages, campaignOverrides) {
+  const previousIssueLength = detectedIssues.length;
+  const previousLockfilesChecked = scanStats.lockfilesChecked;
+  const previousCampaignEntries = Array.from(campaignMap.entries());
+
+  try {
+    if (campaignOverrides instanceof Map) {
+      campaignMap.clear();
+      for (const [pkg, campaign] of campaignOverrides.entries()) {
+        campaignMap.set(pkg, campaign);
+      }
+    }
+
+    checkLockfile(lockPath, badPackages);
+    return detectedIssues.slice(previousIssueLength);
+  } finally {
+    detectedIssues.length = previousIssueLength;
+    scanStats.lockfilesChecked = previousLockfilesChecked;
+
+    campaignMap.clear();
+    for (const [pkg, campaign] of previousCampaignEntries) {
+      campaignMap.set(pkg, campaign);
+    }
   }
 }
 
@@ -2224,7 +2713,7 @@ function generateReport(userInfo, isPartial = false) {
       escapeCSV(userInfo.npmUser),
       escapeCSV(userInfo.platform),
       escapeCSV(userInfo.nodeVersion || process.version),
-      escapeCSV(userInfo.scannerVersion || "2.2.0"),
+      escapeCSV(userInfo.scannerVersion || CONFIG.VERSION),
       escapeCSV(issue.type),
       escapeCSV(issue.campaign || ""),
       escapeCSV(issue.package),
@@ -2499,7 +2988,7 @@ if (require.main === module) {
     scanStats.startTime = Date.now();
 
     console.log(
-      `\n${colors.yellow}=== Shai-Hulud 2.0 / CanisterWorm Detector (v2.2.0) ===${colors.reset}`,
+      `\n${colors.yellow}=== Shai-Hulud 2.0 / CanisterWorm Detector (v${CONFIG.VERSION}) ===${colors.reset}`,
     );
 
     // Parse arguments
@@ -2701,5 +3190,14 @@ if (require.main === module) {
   })();
 }
 
-// Export testable functions (used by tests/test-csv-parser.js)
-module.exports = { parseWizCSV, parseYarnLock, parseCanisterWormCSV };
+// Export testable functions (used by tests/*)
+module.exports = {
+  parseWizCSV,
+  parseYarnLock,
+  parseNpmLock,
+  parsePnpmLock,
+  parseBunLock,
+  runCheckLockfileForTest,
+  parseCanisterWormCSV,
+  resolveEffectivePackageName,
+};

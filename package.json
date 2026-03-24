@@ -1,15 +1,23 @@
 {
   "name": "shai-hulud-2-scanner",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "Forensic scanner for Shai-Hulud 2.0 malware artifacts and compromised packages.",
   "main": "scan.js",
   "bin": {
     "shai-hulud-scanner": "./scan.js"
   },
   "scripts": {
-    "start": "node scan.js"
+    "start": "node scan.js",
+    "test": "node tests/test-csv-parser.js && node tests/test-canisterworm-csv.js && node tests/test-package-name-scope.js && node tests/test-npm-lockfile.js && node tests/test-yarn-lockfile.js && node tests/test-pnpm-lockfile.js && node tests/test-bun-lockfile.js && node tests/test-check-lockfile.js"
   },
-  "keywords": ["security", "malware", "scanner", "shai-hulud", "npm", "forensic"],
+  "keywords": [
+    "security",
+    "malware",
+    "scanner",
+    "shai-hulud",
+    "npm",
+    "forensic"
+  ],
   "author": "CyberDracula",
   "license": "MIT",
   "repository": {

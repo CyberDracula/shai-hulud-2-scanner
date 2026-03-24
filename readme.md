@@ -1,6 +1,6 @@
 # Shai-Hulud 1.0/2.0 Malware Scanner
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/CyberDracula/shai-hulud-2-scanner/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/CyberDracula/shai-hulud-2-scanner/releases)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D12.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/CyberDracula/shai-hulud-2-scanner?style=social)](https://github.com/CyberDracula/shai-hulud-2-scanner)
@@ -205,7 +205,7 @@ The CSV report includes one row per finding. Each row contains the severity leve
 | **WILDCARD_MATCH**    | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious.                                                                                                                       | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below.                                                               |
 | **CRITICAL_SCRIPT**   | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement.  |
 | **VERSION_MATCH**     | 🟠 **HIGH**     | Package name and version match the known infected list                                                                                                                                    | Uninstall package. Check lockfiles. Clear caches.                                                                       |
-| **LOCKFILE_HIT**      | 🟠 **HIGH**     | Malicious version is locked in package-lock.json/yarn.lock - will auto-install on every `npm install`                                                                                     | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate.                                                  |
+| **LOCKFILE_HIT**      | 🟠 **HIGH**     | Malicious version is locked in package-lock.json/npm-shrinkwrap.json/yarn.lock/pnpm-lock.yaml/bun.lock - will auto-install on every install                                              | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate.                                                  |
 | **WILDCARD_LOCK_HIT** | 🟠 **HIGH**     | Lockfile contains a dependency that is known malware (any version).                                                                                                                       | Delete lockfile, remove dependency, regenerate with safe versions.                                                      |
 | **GHOST_PACKAGE**     | 🟡 **WARNING**  | Folder exists with a targeted name, but is empty/broken                                                                                                                                   | Investigate manually. Likely a failed install or cleanup artifact.                                                      |
 | **SCRIPT_WARNING**    | 🟡 **WARNING**  | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`)                        | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket.        |
@@ -323,7 +323,7 @@ Your credentials may have been published to public GitHub repositories:
 
 ```powershell
 # Remove lockfiles
-Remove-Item package-lock.json, yarn.lock, npm-shrinkwrap.json -ErrorAction SilentlyContinue
+Remove-Item package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, npm-shrinkwrap.json -ErrorAction SilentlyContinue
 
 # Remove the malicious package from package.json (manually edit)
 
@@ -338,7 +338,7 @@ Get-ChildItem -Recurse -Include setup_bun.js, bun_environment.js, truffleSecrets
 
 ```bash
 # Remove lockfiles
-rm -f package-lock.json yarn.lock npm-shrinkwrap.json
+rm -f package-lock.json yarn.lock pnpm-lock.yaml bun.lock npm-shrinkwrap.json
 
 # Remove the malicious package from package.json (manually edit)
 

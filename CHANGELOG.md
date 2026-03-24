@@ -5,6 +5,48 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-03-24
+
+### Added
+
+- **Expanded lockfile coverage**
+  - Added `pnpm-lock.yaml` scanning support in directory traversal and package-level lockfile checks
+  - Added `bun.lock` scanning support in directory traversal and package-level lockfile checks
+  - Added `parsePnpmLock()` support for:
+    - `packages` and `snapshots` sections
+    - importer dependency version paths in `importers` blocks (pnpm v9 style)
+    - legacy `/pkg@version` keys and peer-suffix normalization
+  - Added `parseBunLock()` support for Bun textual lockfiles via JSON parsing with token-scan fallback
+- **Scope-aware package identity matching**
+  - Added `resolveEffectivePackageName()` to prefer valid `package.json.name` over directory basename
+  - Prevents scope-loss false positives in wildcard package matching logic
+- **Real lockfile integration testing hooks**
+  - Added `runCheckLockfileForTest()` helper to execute real `checkLockfile()` with isolated global state
+
+### Changed
+
+- `checkLockfile()` now routes npm/yarn/pnpm/bun lockfiles through dedicated parser functions (`parseNpmLock`, `parseYarnLock`, `parsePnpmLock`, `parseBunLock`)
+- `bun.lockb` is intentionally not covered; only `bun.lock` is scanned for Bun lockfiles
+
+### Tests
+
+- Added new parser/unit test files:
+  - `tests/test-npm-lockfile.js`
+  - `tests/test-pnpm-lockfile.js`
+  - `tests/test-bun-lockfile.js`
+  - `tests/test-package-name-scope.js`
+- Added integration-style lockfile test file:
+  - `tests/test-check-lockfile.js`
+- Extended existing test coverage:
+  - Added scoped wildcard exactness test in `tests/test-yarn-lockfile.js`
+  - Added CanisterWorm dedupe/version preservation test in `tests/test-canisterworm-csv.js`
+- Added `npm test` script in `package.json` to run the full local test suite
+
+### Documentation
+
+- Updated lockfile remediation/description text in `readme.md` to include `pnpm-lock.yaml` and `bun.lock`
+- Updated lockfile cleanup command examples in `readme.md` for PowerShell and Bash
+
 ## [2.2.0] - 2026-03-23
 
 ### Added
