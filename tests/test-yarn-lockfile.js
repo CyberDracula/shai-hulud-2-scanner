@@ -124,6 +124,17 @@ test("scoped package — WILDCARD_LOCK_HIT", () => {
   assertEqual(hits[0].type, "WILDCARD_LOCK_HIT", "type is WILDCARD_LOCK_HIT");
 });
 
+test("unscoped wildcard IOC does not match scoped package name", () => {
+  const content = yarnV1Block("@vendor/evil-pkg@^1.0.0:", "1.0.0");
+  const badPackages = { "evil-pkg": new Set(["*"]) };
+  const hits = parseYarnLock(content, badPackages, new Map(), LOCK_PATH);
+  assertEqual(
+    hits.length,
+    0,
+    "scope must match exactly; wildcard only applies to versions",
+  );
+});
+
 test("package not in denylist — no hit", () => {
   const content = yarnV1Block("safe-pkg@^1.0.0:", "1.0.0");
   const badPackages = { "evil-pkg": new Set(["1.0.0"]) };
