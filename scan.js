@@ -1680,7 +1680,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
     packageJson = JSON.parse(content);
 
     // A. HEURISTIC SCRIPT CHECK (Run on everything)
-    checkScripts(packageJson, pkgName, pkgPath);
+    checkScripts(packageJson, pkgName, validatedPkgPath);
 
     // B. TARGET CHECK
     if (!badPackages[pkgName]) return;
