@@ -5,6 +5,40 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-03-23
+
+### Added
+
+- **CanisterWorm / TeamPCP Campaign Detection** (March 2026 supply chain worm)
+  - New **Source 3** IOC feed for CanisterWorm in `fetchThreats()` — loaded from bundled `fallback/canisterworm-packages.csv` (socket.dev live feed cannot be fetched programmatically due to Cloudflare; update by pulling this repo or downloading the CSV manually)
+  - Bundled fallback file `fallback/canisterworm-packages.csv` with **66 malicious packages / 141+ versions** compiled from Socket Research Team and Endor Labs reporting
+  - New `FORENSIC_RULES` entry for `scripts/deploy.js`: flags the CanisterWorm worm republishing script by detecting the `/-/whoami` npm API call (content-verified, bounded regex)
+  - New `CRITICAL_PATTERNS` entries for CanisterWorm behavioral indicators (all bounded, ReDoS-safe):
+    - `tdtqy-oyaaa-aaaae-af2dq-cai.*.icp0.io` — ICP blockchain canister C2 identifier
+    - `raw.icp0.io` — Internet Computer Protocol C2 channel
+    - `systemctl --user enable|start pgmon` — pgmon persistence service install
+    - `pgmon.service` — pgmon service file reference
+    - `/tmp/pglog` — secondary payload drop path
+    - `.local/share/pgmon` — Python implant installation path
+
+- **Campaign Tagging in Reports**
+  - `detectedIssues` objects can now carry an optional `campaign` field (`CANISTERWORM`, `SHAI_HULUD_2`, or empty) when a campaign is known
+  - CSV report gains a new **`Campaign`** column (inserted after `Issue_Type`) for easy filtering and correlation in spreadsheet tools
+  - `campaignMap` (module-level Map) populated at IOC-load time; CanisterWorm entries take precedence over any prior Shai-Hulud tag for the same package
+
+- **CanisterWorm Incident Response Advisory**
+  - New `printCanisterWormAdvisory()` function automatically called when CanisterWorm findings are detected
+  - Outputs 6-step remediation guidance (check `/tmp/pglog`, revoke npm tokens, stop pgmon service, clean deps, check for worm-republished packages) — adapted from security team advisories
+
+- **`update-fallbacks.js` extended**
+  - Now updates Wiz and Hemachandsai feeds automatically and prints a manual-update notice for `canisterworm-packages.csv` (download from socket.dev or pull latest release)
+
+### Changed
+
+- Scanner banner updated to `Shai-Hulud 2.0 / CanisterWorm Detector (v2.2.0)`
+- `fetchThreats()` step label updated from `Dual Feed` to `Triple Feed`
+- Scanner version string updated to `2.2.0`
+
 ## [2.1.0] - 2025-12-03
 
 ### Fixed
