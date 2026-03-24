@@ -1669,6 +1669,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
   // 2. GHOST CHECK & 3. METADATA CHECK & HEURISTIC CHECK
   let packageJson;
+  let effectivePkgName = pkgName;
   try {
     const { content, error } = safeReadFile(
       pJsonPath,
@@ -1709,7 +1710,7 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
 
     // Preserve npm scope (@scope/name) from package metadata to avoid
     // basename-based false positives when wildcard matching versions.
-    const effectivePkgName = resolveEffectivePackageName(pkgName, packageJson);
+    effectivePkgName = resolveEffectivePackageName(pkgName, packageJson);
 
     // A. HEURISTIC SCRIPT CHECK (Run on everything)
     checkScripts(packageJson, effectivePkgName, validatedPkgPath);
@@ -1722,11 +1723,11 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
     if (!version || typeof version !== "string") {
       detectedIssues.push({
         type: "CORRUPT_PACKAGE",
-        package: pkgName,
+        package: effectivePkgName,
         version: "UNKNOWN",
         location: validatedPkgPath,
         details: "Missing or invalid version field",
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
       return;
     }
@@ -1756,14 +1757,14 @@ function checkPackageJson(pkgPath, pkgName, badPackages) {
       });
     }
   } catch (e) {
-    if (badPackages[pkgName]) {
+    if (badPackages[effectivePkgName]) {
       detectedIssues.push({
         type: "CORRUPT_PACKAGE",
-        package: pkgName,
+        package: effectivePkgName,
         version: "UNKNOWN",
         location: validatedPkgPath,
         details: `package.json parse error: ${e.message}`,
-        campaign: campaignMap.get(pkgName) || "",
+        campaign: campaignMap.get(effectivePkgName) || "",
       });
     }
   }
@@ -2499,7 +2500,22 @@ function parseBunLock(content, badPackages, campaignMap, lockPath) {
 
     const pkgName = spec.slice(0, atIndex);
     const rawVersion = spec.slice(atIndex + 1);
-    const version = rawVersion.split("(")[0];
+    const version = rawVersion.split("(")[0].trim();
+
+    // Ignore non-resolved versions/specifiers (e.g. workspace:*).
+    if (
+      !version ||
+      version === "*" ||
+      version.startsWith("workspace:") ||
+      version.startsWith("file:") ||
+      version.startsWith("link:") ||
+      version.startsWith("portal:") ||
+      version.startsWith("github:") ||
+      version.startsWith("git+") ||
+      (!/^[0-9]/.test(version) && !/^v[0-9]/.test(version))
+    ) {
+      return null;
+    }
 
     if (
       pkgName.length > 214 ||

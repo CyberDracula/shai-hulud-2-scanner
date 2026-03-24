@@ -110,6 +110,17 @@ test("campaign is populated from campaignMap", () => {
   assertEqual(hits[0].campaign, "CANISTERWORM", "campaign mapped");
 });
 
+test("workspace specifier is skipped (no misleading exact hit)", () => {
+  const content = JSON.stringify({
+    packages: {
+      "evil-pkg@workspace:*": ["evil-pkg@workspace:*"],
+    },
+  });
+
+  const hits = parse(content, { "evil-pkg": new Set(["*"]) });
+  assertEqual(hits.length, 0, "workspace specifier does not produce a hit");
+});
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
 
