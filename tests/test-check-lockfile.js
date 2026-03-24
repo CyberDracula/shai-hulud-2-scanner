@@ -50,7 +50,12 @@ function withTempDir(fn) {
   try {
     return fn(tempRoot);
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    if (typeof fs.rmSync === "function") {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    } else {
+      // Node.js 12 compatibility: fs.rmSync is not available
+      fs.rmdirSync(tempRoot, { recursive: true });
+    }
   }
 }
 

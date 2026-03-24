@@ -2221,7 +2221,11 @@ function parseNpmLock(content, badPackages, campaignMap, lockPath) {
   // npm lockfile v2/v3
   if (json.packages && typeof json.packages === "object") {
     for (const [key, details] of Object.entries(json.packages)) {
-      const pkgName = key.replace(/^.*node_modules\//, "");
+      let pkgName = key;
+      const nmIndex = key.lastIndexOf("node_modules/");
+      if (nmIndex !== -1) {
+        pkgName = key.slice(nmIndex + "node_modules/".length);
+      }
       if (pkgName && badPackages[pkgName] && details && details.version) {
         addHit(pkgName, details.version, badPackages[pkgName], "NPM_LOCK_V3");
       }
