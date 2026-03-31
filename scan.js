@@ -944,14 +944,15 @@ async function fetchThreats(forceNoCache = false) {
     {
       const customPath = resolveCustomIOCFilePath();
       const customRaw = loadOptionalLocalIOCFile(customPath, "Custom IOC list");
-      customIOCData = customRaw
-        ? { status: "fulfilled", value: customRaw }
-        : {
-            status: "rejected",
-            reason: new Error(
-              `Custom IOC file not found: ${sanitizeForLog(customPath, 120)}`,
-            ),
-          };
+      customIOCData =
+        customRaw != null
+          ? { status: "fulfilled", value: customRaw }
+          : {
+              status: "rejected",
+              reason: new Error(
+                `Custom IOC file could not be loaded (it may be missing, too large, or unreadable): ${sanitizeForLog(customPath, 120)}`,
+              ),
+            };
     }
 
     const badPackages = Object.create(null);
