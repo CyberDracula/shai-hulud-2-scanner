@@ -66,7 +66,7 @@ const CONFIG = Object.freeze({
   MAX_PACKAGES_SCANNED: 50000,
 
   // Scanner identity
-  VERSION: "2.3.0",
+  VERSION: "2.3.1",
 });
 
 // Derived cache paths
