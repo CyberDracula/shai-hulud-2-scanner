@@ -81,6 +81,10 @@ const FALLBACK_CANISTERWORM_FILE = path.join(
   CONFIG.FALLBACK_DIR,
   "canisterworm-packages.csv",
 );
+const FALLBACK_CUSTOM_IOC_FILE = path.join(
+  CONFIG.FALLBACK_DIR,
+  "custom-iocs.txt",
+);
 
 // API Configuration - Use environment variables for sensitive data
 const UPLOAD_API_URL = process.env.SHAI_HULUD_API_URL || "";
@@ -788,6 +792,35 @@ function loadFromFallback(fallbackFile, type) {
   }
 }
 
+function loadOptionalLocalIOCFile(filePath, type) {
+  try {
+    const validated = validatePath(filePath);
+    if (!validated || !fs.existsSync(validated)) return null;
+
+    const { content, error, size } = safeReadFile(validated);
+    if (error) return null;
+
+    console.log(
+      `    > ${type}: Loaded local file (${(size / 1024).toFixed(1)}KB) from ${sanitizeForLog(validated, 120)}.`,
+    );
+    return content;
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolveCustomIOCFilePath() {
+  const customPath = process.env.SHAI_HULUD_CUSTOM_IOC_FILE;
+  if (!customPath || typeof customPath !== "string" || !customPath.trim()) {
+    return FALLBACK_CUSTOM_IOC_FILE;
+  }
+
+  const trimmedPath = customPath.trim();
+  return path.isAbsolute(trimmedPath)
+    ? trimmedPath
+    : path.resolve(process.cwd(), trimmedPath);
+}
+
 function saveToCache(cacheFile, content) {
   try {
     const validated = validatePath(cacheFile);
@@ -835,7 +868,7 @@ function verifyCacheIntegrity(cacheFile) {
 
 async function fetchThreats(forceNoCache = false) {
   console.log(
-    `\n${colors.cyan}[2/5] Downloading Threat Intelligence (Triple Feed)...${colors.reset}`,
+    `\n${colors.cyan}[2/5] Downloading Threat Intelligence (Triple Feed + Local)...${colors.reset}`,
   );
   if (forceNoCache)
     console.log(
@@ -855,6 +888,11 @@ async function fetchThreats(forceNoCache = false) {
       value: null,
     };
     let canisterwormData = {
+      status: "rejected",
+      reason: { message: "Not fetched" },
+      value: null,
+    };
+    let customIOCData = {
       status: "rejected",
       reason: { message: "Not fetched" },
       value: null,
@@ -899,6 +937,20 @@ async function fetchThreats(forceNoCache = false) {
         : {
             status: "rejected",
             reason: new Error("CanisterWorm fallback file not found"),
+          };
+    }
+
+    // Source 4: Optional local custom IOC list for user-defined packages.
+    {
+      const customPath = resolveCustomIOCFilePath();
+      const customRaw = loadOptionalLocalIOCFile(customPath, "Custom IOC list");
+      customIOCData = customRaw
+        ? { status: "fulfilled", value: customRaw }
+        : {
+            status: "rejected",
+            reason: new Error(
+              `Custom IOC file not found: ${sanitizeForLog(customPath, 120)}`,
+            ),
           };
     }
 
@@ -972,6 +1024,34 @@ async function fetchThreats(forceNoCache = false) {
           : "No data";
       console.log(
         `${colors.red}    > [Source 3] CanisterWorm: ${cwError}${colors.reset}`,
+      );
+    }
+
+    // Process Source 4 (Local custom IOC list)
+    if (customIOCData.status === "fulfilled" && customIOCData.value) {
+      const parsed = parseCustomIOCList(customIOCData.value);
+      for (const [pkg, vers] of Object.entries(parsed)) {
+        if (!badPackages[pkg]) badPackages[pkg] = new Set();
+        if (vers.length === 0) {
+          badPackages[pkg].add("*");
+        } else {
+          vers.forEach((v) => badPackages[pkg].add(v));
+        }
+        campaignMap.set(pkg, "CUSTOM_LOCAL");
+      }
+      console.log(
+        `    > [Source 4] Custom local IOCs: ${colors.cyan}${Object.keys(parsed).length} packages${colors.reset} loaded.`,
+      );
+      console.log(
+        `    > ${colors.yellow}Edit ${sanitizeForLog(resolveCustomIOCFilePath(), 120)} to add package@version or package entries.${colors.reset}`,
+      );
+    } else {
+      const customError =
+        customIOCData.reason && customIOCData.reason.message
+          ? customIOCData.reason.message
+          : "No data";
+      console.log(
+        `${colors.dim}    > [Source 4] Custom local IOCs: ${customError}${colors.reset}`,
       );
     }
 
@@ -1236,6 +1316,91 @@ function parseCanisterWormCSV(data) {
       result[fullName].push(version);
     }
   }
+  return result;
+}
+
+function parseCustomIOCList(data) {
+  if (!data || typeof data !== "string") return {};
+
+  const lines = data.split("\n");
+  const result = Object.create(null);
+
+  for (let i = 0; i < lines.length && i < 100000; i++) {
+    const rawLine = lines[i];
+    if (!rawLine || typeof rawLine !== "string") continue;
+
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+
+    let packageName = "";
+    let version = "";
+
+    if (line.includes(",")) {
+      const parts = line.split(",");
+      packageName = parts[0].trim();
+      version = parts.slice(1).join(",").trim();
+    } else {
+      const atIndex = line.lastIndexOf("@");
+      if (atIndex > 0) {
+        packageName = line.slice(0, atIndex).trim();
+        version = line.slice(atIndex + 1).trim();
+      } else {
+        packageName = line;
+      }
+    }
+
+    if (
+      (packageName.startsWith('"') && packageName.endsWith('"')) ||
+      (packageName.startsWith("'") && packageName.endsWith("'"))
+    ) {
+      packageName = packageName.slice(1, -1).trim();
+    }
+
+    if (
+      (version.startsWith('"') && version.endsWith('"')) ||
+      (version.startsWith("'") && version.endsWith("'"))
+    ) {
+      version = version.slice(1, -1).trim();
+    }
+
+    if (
+      !packageName ||
+      packageName.length > 214 ||
+      !/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(
+        packageName,
+      )
+    ) {
+      continue;
+    }
+
+    // Prototype-pollution guard: reject reserved JS keys (CWE-1321)
+    if (
+      packageName === "__proto__" ||
+      packageName === "constructor" ||
+      packageName === "prototype"
+    ) {
+      continue;
+    }
+
+    if (!result[packageName]) result[packageName] = [];
+
+    if (!version || version === "*") {
+      if (!result[packageName].includes("*")) {
+        result[packageName].push("*");
+      }
+      continue;
+    }
+
+    const normalizedVersion = version.replace(/["'=<>v\s]/g, "").trim();
+    if (!normalizedVersion || normalizedVersion.length > 50) continue;
+
+    if (!result[packageName].includes("*")) {
+      if (!result[packageName].includes(normalizedVersion)) {
+        result[packageName].push(normalizedVersion);
+      }
+    }
+  }
+
   return result;
 }
 
@@ -2962,6 +3127,7 @@ ${colors.cyan}EXAMPLES:${colors.reset}
 ${colors.cyan}ENVIRONMENT VARIABLES:${colors.reset}
     SHAI_HULUD_API_URL   URL for report upload API
     SHAI_HULUD_API_KEY   API key for authentication
+  SHAI_HULUD_CUSTOM_IOC_FILE Optional path to custom IOC list file
 
 ${colors.cyan}EXIT CODES:${colors.reset}
     0   - Scan complete, no critical issues (or --fail-on=off)
@@ -3199,5 +3365,6 @@ module.exports = {
   parseBunLock,
   runCheckLockfileForTest,
   parseCanisterWormCSV,
+  parseCustomIOCList,
   resolveEffectivePackageName,
 };

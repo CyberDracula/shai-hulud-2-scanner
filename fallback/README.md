@@ -11,6 +11,7 @@ If the scanner cannot reach the remote IOC sources (network issues, rate limits,
 - `wiz-iocs.csv` - Offline copy of Wiz Research IOCs (Shai-Hulud 2.0 campaign)
 - `malicious-packages.json` - Offline copy of Hemachandsai malicious package list
 - `canisterworm-packages.csv` - CanisterWorm / TeamPCP IOC list (66 packages, 141+ malicious versions)
+- `custom-iocs.txt` - Optional local IOC list you maintain manually (supports `package`, `package@version`, and CSV-style `package,version`)
 
 ## Maintenance
 
