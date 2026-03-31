@@ -1031,13 +1031,15 @@ async function fetchThreats(forceNoCache = false) {
     if (customIOCData.status === "fulfilled" && customIOCData.value) {
       const parsed = parseCustomIOCList(customIOCData.value);
       for (const [pkg, vers] of Object.entries(parsed)) {
-        if (!badPackages[pkg]) badPackages[pkg] = new Set();
-        if (vers.length === 0) {
-          badPackages[pkg].add("*");
-        } else {
-          vers.forEach((v) => badPackages[pkg].add(v));
+        // Skip entries where version parsing/normalization failed (empty or invalid version list)
+        if (!Array.isArray(vers) || vers.length === 0) {
+          continue;
         }
-        campaignMap.set(pkg, "CUSTOM_LOCAL");
+        if (!badPackages[pkg]) badPackages[pkg] = new Set();
+        vers.forEach((v) => badPackages[pkg].add(v));
+        if (!campaignMap.has(pkg)) {
+          campaignMap.set(pkg, "CUSTOM_LOCAL");
+        }
       }
       console.log(
         `    > [Source 4] Custom local IOCs: ${colors.cyan}${Object.keys(parsed).length} packages${colors.reset} loaded.`,
@@ -1382,9 +1384,8 @@ function parseCustomIOCList(data) {
       continue;
     }
 
-    if (!result[packageName]) result[packageName] = [];
-
     if (!version || version === "*") {
+      if (!result[packageName]) result[packageName] = [];
       if (!result[packageName].includes("*")) {
         result[packageName].push("*");
       }
@@ -1394,10 +1395,9 @@ function parseCustomIOCList(data) {
     const normalizedVersion = version.replace(/["'=<>v\s]/g, "").trim();
     if (!normalizedVersion || normalizedVersion.length > 50) continue;
 
-    if (!result[packageName].includes("*")) {
-      if (!result[packageName].includes(normalizedVersion)) {
-        result[packageName].push(normalizedVersion);
-      }
+    if (!result[packageName]) result[packageName] = [];
+    if (!result[packageName].includes(normalizedVersion)) {
+      result[packageName].push(normalizedVersion);
     }
   }
 
@@ -3127,7 +3127,7 @@ ${colors.cyan}EXAMPLES:${colors.reset}
 ${colors.cyan}ENVIRONMENT VARIABLES:${colors.reset}
     SHAI_HULUD_API_URL   URL for report upload API
     SHAI_HULUD_API_KEY   API key for authentication
-  SHAI_HULUD_CUSTOM_IOC_FILE Optional path to custom IOC list file
+    SHAI_HULUD_CUSTOM_IOC_FILE Optional path to custom IOC list file
 
 ${colors.cyan}EXIT CODES:${colors.reset}
     0   - Scan complete, no critical issues (or --fail-on=off)

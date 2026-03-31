@@ -103,6 +103,34 @@ assertEquals(
   "quoted values and v-prefix normalize",
 );
 
+const test11 = parseCustomIOCList("pkg@v");
+assertEquals(
+  test11,
+  {},
+  "malformed bare version (pkg@v) is ignored and produces no entry",
+);
+
+const test12 = parseCustomIOCList("pkg@>=");
+assertEquals(
+  test12,
+  {},
+  "malformed comparator-only version (pkg@>=) is ignored",
+);
+
+const test13 = parseCustomIOCList('"pkg"@">="');
+assertEquals(
+  test13,
+  {},
+  "quoted comparator that normalizes to invalid/empty version is ignored",
+);
+
+const test14 = parseCustomIOCList("okpkg@1.2.3\nbadpkg@v");
+assertEquals(
+  test14,
+  { okpkg: ["1.2.3"] },
+  "invalid version lines do not create wildcard or empty version entries",
+);
+
 console.log(`\n${colors.cyan}Test Results:${colors.reset}`);
 console.log(`${colors.green}Passed: ${passed}${colors.reset}`);
 if (failed > 0) {
