@@ -1,6 +1,6 @@
-# Shai-Hulud 1.0/2.0 Malware Scanner
+# Shai-Hulud 1.0/2.0 CanisterWorm and other npm Supply Chain Attack IOCs Malware Scanner
 
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/CyberDracula/shai-hulud-2-scanner/releases)
+[![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)](https://github.com/CyberDracula/shai-hulud-2-scanner/releases)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D12.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/CyberDracula/shai-hulud-2-scanner?style=social)](https://github.com/CyberDracula/shai-hulud-2-scanner)
@@ -31,6 +31,7 @@ READ THIS FOR MORE INFO: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-c
   * [Wiz Research](https://github.com/wiz-sec-public/wiz-research-iocs) - Official Shai-Hulud 2.0 packages (CSV)
   * [Hemachandsai Malicious Packages](https://github.com/hemachandsai/shai-hulud-malicious-packages) - Extended denylist (JSON)
   * [Socket.dev CanisterWorm Campaign](https://socket.dev/supply-chain-attacks/canisterworm) - TeamPCP self-propagating worm IOCs (bundled CSV, updated with each release)
+* **Custom Local IOC Feed:** Add your own package IOCs in `fallback/custom-iocs.txt` when you cannot fetch them from an online source.
 * **Smart Caching:** IOC data is cached for 30 minutes to reduce network requests. Automatic fallback to offline data if network is unavailable.
 * **Deep NVM Support:** Automatically detects NVM installations (Windows/macOS/Linux) and scans inside every installed Node version.
 * **Forensic Scan:** Checks for physical malware files (setup_bun.js, bun_environment.js) regardless of version numbers.
@@ -87,6 +88,29 @@ To scan both system caches AND a specific directory, use the `--full-scan` flag:
 IOC data is cached for 30 minutes. To force a fresh download:
 
     node scan.js --no-cache
+
+**Custom IOC File (Local Overrides/Additions)**
+
+The scanner always tries to load your local custom IOC file from:
+
+    fallback/custom-iocs.txt
+
+Supported formats (one entry per line):
+
+    package-name
+    package-name@1.2.3
+    @scope/package-name
+    @scope/package-name@1.2.3
+    package-name,1.2.3
+    @scope/package-name,*
+
+Notes:
+
+* Empty version or `*` means wildcard (all versions).
+* Lines starting with `#` or `;` are comments.
+* If you want a different location, set:
+
+    SHAI_HULUD_CUSTOM_IOC_FILE=/absolute/or/relative/path/to/custom-iocs.txt
 
 **Set API Keys/Upload URLs via Environment Variables**
 
@@ -205,7 +229,7 @@ The CSV report includes one row per finding. Each row contains the severity leve
 | **WILDCARD_MATCH**    | 🔴 **CRITICAL** | Package matches a strict denylist where ALL versions are malicious.                                                                                                                       | ⚠️ **DELETE IMMEDIATELY.** Follow remediation steps below.                                                               |
 | **CRITICAL_SCRIPT**   | 🔴 **CRITICAL** | Install/preinstall/postinstall script contains high-confidence malicious behavior (e.g., piping remote code to shell, base64→sh chains, privileged Docker flags, workflow backdoor files) | ⚠️ **ACTION NEEDED** Treat as incident: isolate host, remove package, rotate credentials, investigate lateral movement.  |
 | **VERSION_MATCH**     | 🟠 **HIGH**     | Package name and version match the known infected list                                                                                                                                    | Uninstall package. Check lockfiles. Clear caches.                                                                       |
-| **LOCKFILE_HIT**      | 🟠 **HIGH**     | Malicious version is locked in package-lock.json/npm-shrinkwrap.json/yarn.lock/pnpm-lock.yaml/bun.lock - will auto-install on every install                                              | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate.                                                  |
+| **LOCKFILE_HIT**      | 🟠 **HIGH**     | Malicious version is locked in package-lock.json/npm-shrinkwrap.json/yarn.lock/pnpm-lock.yaml/bun.lock - will auto-install on every install                                               | ⚠️ **CRITICAL FOR CI/CD.** Delete lockfile, remove package, regenerate.                                                  |
 | **WILDCARD_LOCK_HIT** | 🟠 **HIGH**     | Lockfile contains a dependency that is known malware (any version).                                                                                                                       | Delete lockfile, remove dependency, regenerate with safe versions.                                                      |
 | **GHOST_PACKAGE**     | 🟡 **WARNING**  | Folder exists with a targeted name, but is empty/broken                                                                                                                                   | Investigate manually. Likely a failed install or cleanup artifact.                                                      |
 | **SCRIPT_WARNING**    | 🟡 **WARNING**  | Install/preinstall/postinstall script has suspicious indicators (e.g., obfuscation via Buffer/Base64, dynamic Function(), GitHub API/artifact usage, `nc`/`socat`)                        | Review and validate script intent. If not business-critical, remove or pin safe version; open a security ticket.        |

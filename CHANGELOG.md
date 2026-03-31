@@ -5,6 +5,22 @@ All notable changes to the Shai-Hulud 1.0/2.0 Scanner will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-04-01
+
+### Added
+
+- **Custom local IOC list support**
+  - Added `fallback/custom-iocs.txt` as an optional user-maintained IOC source
+  - Added `parseCustomIOCList()` with support for `package`, `package@version`, and `package,version` formats
+  - Added optional `SHAI_HULUD_CUSTOM_IOC_FILE` environment variable to override the custom IOC file location
+  - Added source merge in `fetchThreats()` with campaign tag `CUSTOM_LOCAL`
+  - Added parser tests in `tests/test-custom-ioc-parser.js`
+
+### Documentation
+
+- Updated custom IOC list usage in `readme.md`
+- Updated fallback IOC documentation in `fallback/README.md`
+
 ## [2.3.0] - 2026-03-24
 
 ### Added

@@ -1,0 +1,29 @@
+# Custom local IOC list
+#
+# Add one package per line using either format:
+#   package-name
+#   package-name@1.2.3
+#   @scope/package-name
+#   @scope/package-name@1.2.3
+#
+# You can also use CSV-style lines:
+#   package-name,1.2.3
+#   @scope/package-name,*
+#
+# Rules:
+# - Empty lines are ignored.
+# - Lines starting with # or ; are treated as comments.
+# - A missing version, or version "*", means all versions are treated as malicious.
+# - Keep package names lowercase and npm-valid.
+
+# Example entries:
+# left-pad
+# minimist@1.2.5
+# @acme/compromised-lib@0.9.4
+# @acme/backdoor,*
+
+
+# https://thehackernews.com/2026/03/axios-supply-chain-attack-pushes-cross.html
+plain-crypto-js@4.2.1
+axios@1.14.1
+axios@0.30.4
